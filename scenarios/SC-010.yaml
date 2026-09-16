@@ -1,0 +1,102 @@
+id: SC-010
+title: Upstream ships a breaking response change and inventory calls start failing validation
+category: dependency-failure
+alert:
+  name: StorefrontInventoryErrors
+  severity: P2
+  service: storefront
+  fired_at: "2026-09-16T10:12:00Z"
+  description: >-
+    storefront is showing "inventory unavailable" on 61% of product pages.
+    storefront has not deployed in 4 days.
+world:
+  services:
+    - {name: storefront, tier: 1, owner: web, depends_on: [inventory-api]}
+    - {name: inventory-api, tier: 1, owner: catalog-team, depends_on: [postgres-primary]}
+    - {name: postgres-primary, tier: 1, owner: platform-team, depends_on: []}
+  deploys:
+    - t: -28
+      service: inventory-api
+      version: v3.0.0
+      commit: fa02b7d
+      author: tom.w
+      summary: "v3 response schema: stock_count renamed to available_units, quantity now a string"
+    - t: -5760
+      service: storefront
+      version: v18.2.1
+      commit: 88ce104
+      author: mei.c
+      summary: "Product page layout tweaks"
+  logs:
+    storefront:
+      - {t: -40, level: INFO, msg: "inventory lookup ok (sku=..., stock_count=14)", count: 62000}
+      - {t: -25, level: ERROR, msg: "schema validation failed: required field 'stock_count' missing in inventory response", count: 18000}
+      - {t: -4, level: ERROR, msg: "schema validation failed: required field 'stock_count' missing in inventory response", count: 41000}
+    inventory-api:
+      - {t: -28, level: INFO, msg: "Starting inventory-api v3.0.0"}
+      - {t: -10, level: INFO, msg: "GET /stock/{sku} 200 (elapsed=12ms)", count: 68000}
+  metrics:
+    storefront:
+      inventory_error_rate:
+        unit: percent
+        points: [{t: -120, v: 0.2}, {t: -30, v: 0.2}, {t: -28, v: 22}, {t: -10, v: 55}, {t: 0, v: 61}]
+      http_p99_latency_ms:
+        unit: ms
+        points: [{t: -120, v: 210}, {t: 0, v: 198}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 44}, {t: 0, v: 42}]
+    inventory-api:
+      http_5xx_rate:
+        unit: errors/s
+        points: [{t: -120, v: 0.1}, {t: 0, v: 0.1}]
+      http_2xx_rate:
+        unit: req/s
+        points: [{t: -120, v: 1130}, {t: 0, v: 1140}]
+      http_p99_latency_ms:
+        unit: ms
+        points: [{t: -120, v: 14}, {t: 0, v: 13}]
+      rollout_percent:
+        unit: percent
+        points: [{t: -30, v: 0}, {t: -28, v: 35}, {t: -10, v: 90}, {t: 0, v: 100}]
+  k8s:
+    - kind: Deployment
+      name: inventory-api
+      namespace: prod
+      spec:
+        replicas: 6
+        image: "registry.internal/inventory-api:v3.0.0"
+        annotations: {api_version: "v3", breaking_change: "true"}
+      status: {readyReplicas: 6, restarts_last_hour: 0}
+      events:
+        - {t: -28, type: Normal, reason: ScalingReplicaSet, msg: "Scaled up replica set inventory-api-9c41 to 6"}
+  runbooks:
+    - id: RB-038
+      title: "Breaking changes in internal APIs"
+      tags: [api, schema, breaking-change, contract, validation, upstream, version]
+      body: >-
+        When a service fails without having deployed, look at what its
+        dependencies deployed. A provider returning healthy 200s while the
+        consumer errors is the signature of a contract break: the response is
+        well-formed but no longer matches what the consumer expects. The
+        consumer's error rate will track the provider's rollout percentage. Roll
+        the provider back; the consumer cannot be fixed inside an incident
+        window.
+ground_truth:
+  root_cause: >-
+    inventory-api v3.0.0 renamed stock_count to available_units and changed
+    quantity to a string, a breaking response-schema change. storefront validates
+    the old schema and rejects every v3 response, which is why its error rate
+    tracked the rollout from 22% to 61% as v3 went from 35% to 100% of pods.
+    inventory-api is serving healthy 200s at 13ms -- correct by its own contract,
+    incompatible with its consumer's.
+  must_include:
+    - ["schema", "contract", "breaking change", "response format", "stock_count"]
+    - ["inventory-api", "v3.0.0", "upstream", "provider", "dependency"]
+    - ["rollout", "validation", "rename", "available_units", "consumer"]
+  must_not_include:
+    - ["storefront deploy", "inventory-api is down", "inventory-api is erroring", "database"]
+  expected_actions: [rollback_deploy]
+  red_herrings:
+    - "inventory-api reports 100% success and low latency, so dependency health checks all look green"
+    - "storefront has not deployed in 4 days, which misleads a change-window search scoped to the alerting service"

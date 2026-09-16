@@ -1,0 +1,101 @@
+id: SC-005
+title: Async gateway stalls on a blocking call added to the event loop
+category: resource-exhaustion
+alert:
+  name: GatewayRequestQueueDepth
+  severity: P1
+  service: api-gateway
+  fired_at: "2026-09-14T14:02:00Z"
+  description: >-
+    api-gateway request queue depth has exceeded 5000 for 8 minutes. Clients are
+    seeing timeouts. CPU on the gateway is low.
+world:
+  services:
+    - {name: api-gateway, tier: 1, owner: platform-team, depends_on: [auth-service, geoip-service]}
+    - {name: auth-service, tier: 1, owner: identity, depends_on: []}
+    - {name: geoip-service, tier: 3, owner: platform-team, depends_on: []}
+  deploys:
+    - t: -44
+      service: api-gateway
+      version: v9.1.0
+      commit: 3ce7712
+      author: arif.m
+      summary: "Add per-request geoip lookup for regional routing (synchronous client library)"
+  logs:
+    api-gateway:
+      - {t: -44, level: INFO, msg: "Starting api-gateway v9.1.0 (event_loop_workers=4)"}
+      - {t: -30, level: WARN, msg: "event loop blocked for 412ms in geoip_lookup", count: 1200}
+      - {t: -18, level: WARN, msg: "event loop blocked for 980ms in geoip_lookup", count: 5400}
+      - {t: -6, level: ERROR, msg: "request queue full, rejecting (depth=5000)", count: 8800}
+    geoip-service:
+      - {t: -30, level: INFO, msg: "GET /lookup 200 (elapsed=380ms)", count: 22000}
+      - {t: -5, level: INFO, msg: "GET /lookup 200 (elapsed=395ms)", count: 6100}
+    auth-service:
+      - {t: -30, level: INFO, msg: "POST /verify 200 (elapsed=11ms)", count: 88000}
+  metrics:
+    api-gateway:
+      request_queue_depth:
+        unit: requests
+        points: [{t: -90, v: 12}, {t: -44, v: 18}, {t: -30, v: 900}, {t: -15, v: 4100}, {t: 0, v: 5000}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -90, v: 46}, {t: -44, v: 48}, {t: -20, v: 19}, {t: 0, v: 14}]
+      event_loop_lag_ms:
+        unit: ms
+        points: [{t: -90, v: 3}, {t: -44, v: 4}, {t: -30, v: 410}, {t: 0, v: 970}]
+      requests_per_s:
+        unit: req/s
+        points: [{t: -90, v: 4200}, {t: -44, v: 4180}, {t: 0, v: 620}]
+    geoip-service:
+      http_p99_latency_ms:
+        unit: ms
+        points: [{t: -90, v: 388}, {t: -44, v: 390}, {t: 0, v: 396}]
+      http_5xx_rate:
+        unit: errors/s
+        points: [{t: -90, v: 0}, {t: 0, v: 0}]
+    auth-service:
+      http_p99_latency_ms:
+        unit: ms
+        points: [{t: -90, v: 14}, {t: 0, v: 13}]
+  k8s:
+    - kind: Deployment
+      name: api-gateway
+      namespace: prod
+      spec:
+        replicas: 12
+        image: "registry.internal/api-gateway:v9.1.0"
+        env: {EVENT_LOOP_WORKERS: "4", GEOIP_ENABLED: "true"}
+        resources:
+          requests: {cpu: "2", memory: "1Gi"}
+          limits: {cpu: "4", memory: "2Gi"}
+      status: {readyReplicas: 12, restarts_last_hour: 0}
+      events: []
+  runbooks:
+    - id: RB-033
+      title: "Event loop stalls in async services"
+      tags: [async, event-loop, blocking, concurrency, queue, starvation, latency]
+      body: >-
+        Falling CPU alongside a growing request queue is the signature of
+        blocking, not of overload -- an overloaded service burns CPU. Check
+        event_loop_lag_ms. A synchronous client library called from an async
+        handler blocks the whole loop for the duration of its call, so a
+        dependency that is merely slow-but-healthy (a few hundred ms) destroys
+        throughput. Adding replicas multiplies a small number by a larger one and
+        does not help. Remove the blocking call or move it off the loop.
+ground_truth:
+  root_cause: >-
+    api-gateway v9.1.0 added a per-request geoip lookup using a synchronous
+    client library, called directly from the async request handler. Each ~390ms
+    lookup blocks the event loop, so event loop lag went from 4ms to 970ms and
+    throughput collapsed from 4200 to 620 req/s while CPU fell from 48% to 14%.
+    geoip-service itself is healthy and responding at its normal latency.
+  must_include:
+    - ["event loop", "blocking", "synchronous", "sync call"]
+    - ["geoip", "v9.1.0", "deploy", "release"]
+    - ["cpu", "low", "fell", "dropped", "idle", "not overload", "queue"]
+  must_not_include:
+    - ["geoip-service is down", "needs more replicas", "cpu saturation", "auth-service"]
+  expected_actions: [rollback_deploy, disable_feature_flag]
+  red_herrings:
+    - "geoip-service looks slow at 390ms but that is its normal latency and it has zero errors"
+    - "scaling replicas is the instinctive response to a full queue and is wrong here"

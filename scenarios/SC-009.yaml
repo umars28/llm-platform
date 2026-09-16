@@ -1,0 +1,98 @@
+id: SC-009
+title: Expired internal TLS certificate breaks service-to-service calls
+category: dependency-failure
+alert:
+  name: BillingServiceUpstreamErrors
+  severity: P1
+  service: billing-service
+  fired_at: "2026-09-16T00:01:00Z"
+  description: >-
+    billing-service is failing 100% of calls to ledger-service. Invoice
+    generation has stopped. Started exactly at midnight UTC.
+world:
+  services:
+    - {name: billing-service, tier: 1, owner: finance-eng, depends_on: [ledger-service]}
+    - {name: ledger-service, tier: 1, owner: finance-eng, depends_on: [postgres-primary]}
+    - {name: postgres-primary, tier: 1, owner: platform-team, depends_on: []}
+  deploys:
+    - t: -4320
+      service: ledger-service
+      version: v5.2.0
+      commit: 0ae31c9
+      author: kevin.o
+      summary: "Add pagination to ledger entry export"
+  logs:
+    billing-service:
+      - {t: -30, level: INFO, msg: "POST /ledger/entries 200 (elapsed=28ms)", count: 14000}
+      - {t: 0, level: ERROR, msg: "x509: certificate has expired or is not yet valid: current time 2026-09-16T00:01:00Z is after 2026-09-16T00:00:00Z", count: 900}
+      - {t: 4, level: ERROR, msg: "x509: certificate has expired or is not yet valid", count: 3800}
+    ledger-service:
+      - {t: -30, level: INFO, msg: "POST /entries 200 (elapsed=24ms)", count: 14000}
+      - {t: 2, level: WARN, msg: "TLS handshake failed from 10.4.5.x: remote error: bad certificate", count: 3800}
+  metrics:
+    billing-service:
+      upstream_error_rate:
+        unit: percent
+        points: [{t: -120, v: 0.1}, {t: -10, v: 0.1}, {t: 0, v: 100}, {t: 5, v: 100}]
+      invoices_generated_per_min:
+        unit: invoices/min
+        points: [{t: -120, v: 340}, {t: -10, v: 336}, {t: 0, v: 0}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 31}, {t: 0, v: 8}]
+    ledger-service:
+      http_requests_per_s:
+        unit: req/s
+        points: [{t: -120, v: 240}, {t: -10, v: 238}, {t: 0, v: 0}]
+      tls_handshake_failures_per_s:
+        unit: failures/s
+        points: [{t: -120, v: 0}, {t: 0, v: 63}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 26}, {t: 0, v: 3}]
+      certificate_days_until_expiry:
+        unit: days
+        points: [{t: -1440, v: 1}, {t: -120, v: 0}, {t: 0, v: -1}]
+  k8s:
+    - kind: Secret
+      name: ledger-service-tls
+      namespace: prod
+      spec:
+        type: kubernetes.io/tls
+        subject: "CN=ledger-service.prod.internal"
+        not_after: "2026-09-16T00:00:00Z"
+        issuer: "internal-ca"
+        auto_renew: false
+      status: {expired: true}
+      events:
+        - {t: -10080, type: Warning, reason: CertificateExpiringSoon, msg: "Certificate for ledger-service.prod.internal expires in 7 days"}
+  runbooks:
+    - id: RB-037
+      title: "Internal certificate expiry"
+      tags: [tls, certificate, x509, expiry, handshake, renewal, mtls]
+      body: >-
+        An incident that begins on a precise clock boundary with no preceding
+        deploy is almost always time-triggered: certificate expiry, a token
+        lifetime, a cron job or a licence. x509 "certificate has expired" in
+        caller logs paired with "bad certificate" handshake failures in the
+        callee identifies it immediately. Check the Secret's not_after and
+        whether auto_renew is set -- a certificate that expired is usually one
+        that was issued manually and never enrolled in renewal.
+ground_truth:
+  root_cause: >-
+    The TLS certificate for ledger-service.prod.internal had not_after
+    2026-09-16T00:00:00Z and auto_renew disabled, so it expired exactly at
+    midnight. billing-service now rejects the handshake with an x509 expiry
+    error and every call fails. Both services are otherwise healthy -- their CPU
+    fell because they are doing no work, and an expiry warning fired seven days
+    earlier and was not actioned.
+  must_include:
+    - ["certificate", "tls", "x509", "cert"]
+    - ["expired", "expiry", "not_after", "midnight"]
+    - ["ledger-service", "renew", "auto_renew", "handshake"]
+  must_not_include:
+    - ["ledger-service is down", "deploy caused", "network partition", "postgres"]
+  expected_actions: [rotate_certificate]
+  red_herrings:
+    - "both services show CPU collapsing, which reads as an outage rather than as idleness"
+    - "the most recent deploy was three days earlier and is unrelated"

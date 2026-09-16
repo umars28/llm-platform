@@ -1,0 +1,96 @@
+id: SC-004
+title: Node disk fills with unrotated audit logs and evicts pods
+category: resource-exhaustion
+alert:
+  name: NodeDiskPressure
+  severity: P2
+  service: search-api
+  fired_at: "2026-09-13T22:18:00Z"
+  description: >-
+    search-api has lost 3 of 10 pods to eviction in the last 20 minutes.
+    Kubelet reports DiskPressure on node ip-10-4-3-88.
+world:
+  services:
+    - {name: search-api, tier: 1, owner: discovery, depends_on: [elasticsearch]}
+    - {name: audit-sink, tier: 3, owner: security-team, depends_on: []}
+    - {name: elasticsearch, tier: 1, owner: platform-team, depends_on: []}
+  deploys:
+    - t: -2880
+      service: audit-sink
+      version: v0.9.1
+      commit: aa71c30
+      author: security-bot
+      summary: "Emit full request bodies to local audit log; logrotate config not included in chart"
+  logs:
+    search-api:
+      - {t: -25, level: WARN, msg: "failed to write temp index segment: no space left on device", count: 44}
+      - {t: -12, level: ERROR, msg: "shutting down: evicted by kubelet (DiskPressure)", count: 3}
+    audit-sink:
+      - {t: -60, level: INFO, msg: "audit log /var/log/audit/requests.log size=186GB"}
+      - {t: -5, level: INFO, msg: "audit log /var/log/audit/requests.log size=197GB"}
+    elasticsearch:
+      - {t: -30, level: INFO, msg: "cluster health green, 14 nodes"}
+  metrics:
+    search-api:
+      http_5xx_rate:
+        unit: errors/s
+        points: [{t: -120, v: 0.1}, {t: -30, v: 0.4}, {t: 0, v: 9.8}]
+      ready_replicas:
+        unit: pods
+        points: [{t: -120, v: 10}, {t: -20, v: 10}, {t: 0, v: 7}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 41}, {t: 0, v: 58}]
+    audit-sink:
+      log_bytes_written_per_s:
+        unit: MiB/s
+        points: [{t: -2880, v: 0.2}, {t: -1440, v: 41}, {t: 0, v: 44}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 6}, {t: 0, v: 7}]
+    elasticsearch:
+      cluster_health:
+        unit: "0=red 1=yellow 2=green"
+        points: [{t: -120, v: 2}, {t: 0, v: 2}]
+      query_p99_latency_ms:
+        unit: ms
+        points: [{t: -120, v: 64}, {t: 0, v: 71}]
+  k8s:
+    - kind: Node
+      name: ip-10-4-3-88
+      namespace: prod
+      spec: {instance_type: m6i.4xlarge, disk_size_gb: 200}
+      status:
+        conditions: {DiskPressure: "True", MemoryPressure: "False", Ready: "True"}
+        disk_used_percent: 99
+        pods_evicted_last_hour: 3
+      events:
+        - {t: -26, type: Warning, reason: FreeDiskSpaceFailed, msg: "failed to garbage collect required amount of images"}
+        - {t: -12, type: Warning, reason: Evicted, msg: "The node was low on resource: ephemeral-storage"}
+  runbooks:
+    - id: RB-032
+      title: "Node disk pressure and pod eviction"
+      tags: [disk, storage, eviction, diskpressure, node, ephemeral]
+      body: >-
+        Kubelet evicts pods when a node crosses its ephemeral-storage threshold,
+        and it evicts by priority, not by culpability -- the workload that filled
+        the disk is frequently not the one that gets killed. Identify the actual
+        consumer before acting. Clearing space restores service immediately but
+        the disk refills at the same rate unless the writer is fixed.
+ground_truth:
+  root_cause: >-
+    audit-sink v0.9.1 began writing full request bodies to a local log on
+    ip-10-4-3-88 at roughly 44 MiB/s and shipped without a logrotate config, so
+    /var/log/audit/requests.log grew to 197GB and filled the node's 200GB disk.
+    Kubelet then evicted pods by priority, which took out three search-api pods.
+    search-api is the victim; audit-sink is the cause.
+  must_include:
+    - ["audit-sink", "audit log", "audit"]
+    - ["disk", "storage", "no space", "197gb", "filled", "full"]
+    - ["rotate", "logrotate", "unbounded", "not rotated", "no rotation"]
+  must_not_include:
+    - ["search-api is leaking", "elasticsearch is unhealthy", "search-api needs more replicas"]
+  expected_actions: [clear_disk_space, rollback_deploy]
+  red_herrings:
+    - "the alert names search-api, which is purely the victim of eviction"
+    - "elasticsearch is green and fast throughout"

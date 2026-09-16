@@ -187,35 +187,7 @@ world:
       body: >-
         Symptoms: postgres-primary CPU above 85% with rising replication lag.
         Identify heavy queries with pg_stat_statements before scaling.
-    - id: RB-021
-      title: "Rolling back a bad deploy"
-      tags: [deploy, rollback, release]
-      body: >-
-        Use the rollback_deploy action with the last known-good version.
-        Rollback is the default response when an incident starts within
-        30 minutes of a release and the change is not a security fix.
 
-  actions:
-    - id: increase_db_pool_size
-      description: "Raise DB_POOL_SIZE for a service and restart its pods"
-      risk: medium
-      params: [service, new_size]
-    - id: rollback_deploy
-      description: "Roll a service back to a previous released version"
-      risk: medium
-      params: [service, target_version]
-    - id: scale_replicas
-      description: "Change the replica count of a Deployment"
-      risk: low
-      params: [service, replicas]
-    - id: restart_pods
-      description: "Rolling restart of a Deployment's pods"
-      risk: low
-      params: [service]
-    - id: failover_database
-      description: "Promote a Postgres replica to primary"
-      risk: high
-      params: [cluster]
 
 ground_truth:
   root_cause: >-

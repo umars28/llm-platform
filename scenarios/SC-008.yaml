@@ -1,0 +1,93 @@
+id: SC-008
+title: Helm chart change drops a region variable and sends traffic cross-region
+category: config-error
+alert:
+  name: CartServiceLatencyHigh
+  severity: P2
+  service: cart-service
+  fired_at: "2026-09-16T03:20:00Z"
+  description: >-
+    cart-service p99 latency rose from 45ms to 340ms after a routine chart
+    upgrade. Error rate is unchanged. All pods healthy.
+world:
+  services:
+    - {name: cart-service, tier: 1, owner: commerce, depends_on: [session-store]}
+    - {name: session-store, tier: 1, owner: platform-team, depends_on: []}
+  deploys:
+    - t: -35
+      service: cart-service
+      version: v2.9.1
+      commit: b4409de
+      author: platform-bot
+      summary: "Helm chart 3.0.0 upgrade: restructure values.yaml, no application code change"
+  logs:
+    cart-service:
+      - {t: -35, level: INFO, msg: "Starting cart-service v2.9.1 (session_store=session-store.us-east-1.internal)"}
+      - {t: -30, level: INFO, msg: "GET /cart 200 (elapsed=338ms, upstream=session-store.us-east-1.internal)", count: 44000}
+      - {t: -40, level: INFO, msg: "GET /cart 200 (elapsed=44ms, upstream=session-store.ap-southeast-2.internal)", count: 51000}
+    session-store:
+      - {t: -60, level: INFO, msg: "GET /session 200 (elapsed=3ms)", count: 96000}
+      - {t: -5, level: INFO, msg: "GET /session 200 (elapsed=3ms)", count: 8900}
+  metrics:
+    cart-service:
+      http_p99_latency_ms:
+        unit: ms
+        points: [{t: -120, v: 45}, {t: -40, v: 46}, {t: -35, v: 310}, {t: 0, v: 340}]
+      http_5xx_rate:
+        unit: errors/s
+        points: [{t: -120, v: 0.05}, {t: 0, v: 0.05}]
+      upstream_rtt_ms:
+        unit: ms
+        points: [{t: -120, v: 2}, {t: -35, v: 198}, {t: 0, v: 201}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 28}, {t: 0, v: 26}]
+    session-store:
+      http_p99_latency_ms:
+        unit: ms
+        points: [{t: -120, v: 4}, {t: 0, v: 4}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 17}, {t: 0, v: 18}]
+  k8s:
+    - kind: Deployment
+      name: cart-service
+      namespace: prod
+      spec:
+        replicas: 8
+        image: "registry.internal/cart-service:v2.9.1"
+        env:
+          SESSION_STORE_HOST: "session-store.us-east-1.internal"
+          REGION: ""
+        resources: {requests: {cpu: "500m", memory: "512Mi"}, limits: {cpu: "1", memory: "1Gi"}}
+      status: {readyReplicas: 8, restarts_last_hour: 0}
+      events:
+        - {t: -35, type: Normal, reason: ScalingReplicaSet, msg: "Scaled up replica set cart-service-6b2d to 8"}
+  runbooks:
+    - id: RB-036
+      title: "Chart upgrades and dropped values"
+      tags: [helm, chart, values, region, config, upgrade, default]
+      body: >-
+        A chart major upgrade that restructures values.yaml commonly drops keys
+        that were set under the old path. The application then falls back to a
+        compiled-in default, which is usually the vendor's or the first region
+        ever deployed. Symptom is a step change in upstream RTT with no error
+        rate change. This cluster runs in ap-southeast-2; a us-east-1 endpoint in
+        prod config is always wrong. Cross-region RTT is roughly 200ms.
+ground_truth:
+  root_cause: >-
+    The Helm chart 3.0.0 upgrade restructured values.yaml and dropped the REGION
+    value, so SESSION_STORE_HOST fell back to the compiled-in default
+    session-store.us-east-1.internal. cart-service now crosses from
+    ap-southeast-2 to us-east-1 on every request, adding about 200ms of network
+    round trip. session-store itself answers in 3-4ms in both regions.
+  must_include:
+    - ["region", "us-east-1", "cross-region", "cross region"]
+    - ["chart", "helm", "values", "config", "env", "default"]
+    - ["rtt", "network", "round trip", "latency", "200ms", "198", "201"]
+  must_not_include:
+    - ["session-store is slow", "session-store is overloaded", "needs more replicas"]
+  expected_actions: [revert_config_change, rollback_deploy]
+  red_herrings:
+    - "no application code changed, so a code-focused search finds nothing"
+    - "session-store latency is flat and healthy, which can read as 'dependency is fine, must be us' without finding the real reason"

@@ -16,12 +16,14 @@ from __future__ import annotations
 import datetime as dt
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 SCENARIO_DIR = Path(__file__).resolve().parents[2] / "scenarios"
+COMMON_FILE = SCENARIO_DIR / "_common.yaml"
 
 
 class ScenarioError(ValueError):
@@ -82,7 +84,28 @@ def load_scenario(ref: str | Path) -> Scenario:
 
 
 def all_scenarios() -> list[Scenario]:
-    return [load_scenario(p) for p in sorted(SCENARIO_DIR.glob("*.yaml"))]
+    """Every scenario file. Leading-underscore files are shared data, not scenarios."""
+    return [
+        load_scenario(p)
+        for p in sorted(SCENARIO_DIR.glob("*.yaml"))
+        if not p.name.startswith("_")
+    ]
+
+
+@lru_cache(maxsize=1)
+def common_catalogue() -> dict[str, Any]:
+    """Remediation actions and general runbooks shared by every scenario."""
+    if not COMMON_FILE.exists():
+        return {"actions": [], "runbooks": []}
+    raw = yaml.safe_load(COMMON_FILE.read_text()) or {}
+    return {"actions": raw.get("actions", []), "runbooks": raw.get("runbooks", [])}
+
+
+def _merge_by_id(shared: list[dict[str, Any]], local: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Shared entries first; a local entry reusing an id replaces the shared one."""
+    merged = {entry["id"]: entry for entry in shared}
+    merged.update({entry["id"]: entry for entry in local})
+    return list(merged.values())
 
 
 @dataclass
@@ -246,7 +269,10 @@ class World:
         """
         terms = {t for t in re.findall(r"[a-z0-9]+", query.lower()) if len(t) > 2}
         scored = []
-        for book in self.scenario.world.get("runbooks", []):
+        books = _merge_by_id(
+            common_catalogue()["runbooks"], self.scenario.world.get("runbooks", [])
+        )
+        for book in books:
             haystack = " ".join(
                 [book.get("title", ""), book.get("body", ""), " ".join(book.get("tags", []))]
             ).lower()
@@ -268,7 +294,9 @@ class World:
     # -- remediation ------------------------------------------------------
 
     def actions(self) -> list[dict[str, Any]]:
-        return list(self.scenario.world.get("actions", []))
+        return _merge_by_id(
+            common_catalogue()["actions"], self.scenario.world.get("actions", [])
+        )
 
     def action(self, action_id: str) -> dict[str, Any]:
         for a in self.actions():

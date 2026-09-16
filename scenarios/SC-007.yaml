@@ -1,0 +1,100 @@
+id: SC-007
+title: Feature flag rollout turns one query into an N+1 against the orders table
+category: bad-release
+alert:
+  name: OrdersAPILatencyHigh
+  severity: P1
+  service: orders-api
+  fired_at: "2026-09-15T16:45:00Z"
+  description: >-
+    orders-api p95 latency is 3.1s against a 500ms SLO. Latency correlates with
+    account size -- large accounts are worst affected.
+world:
+  services:
+    - {name: orders-api, tier: 1, owner: commerce, depends_on: [postgres-primary]}
+    - {name: postgres-primary, tier: 1, owner: platform-team, depends_on: []}
+  deploys:
+    - t: -180
+      service: orders-api
+      version: v11.4.0
+      commit: 7b21fe8
+      author: nadia.k
+      summary: "Add line-item enrichment behind flag orders_enrich_line_items (default off)"
+  logs:
+    orders-api:
+      - {t: -70, level: INFO, msg: "feature flag orders_enrich_line_items rollout 5%"}
+      - {t: -40, level: INFO, msg: "feature flag orders_enrich_line_items rollout 50%"}
+      - {t: -18, level: INFO, msg: "feature flag orders_enrich_line_items rollout 100%"}
+      - {t: -12, level: WARN, msg: "slow request: GET /orders/{id} 2840ms (queries=412)", count: 640}
+      - {t: -3, level: WARN, msg: "slow request: GET /orders/{id} 3190ms (queries=488)", count: 1900}
+    postgres-primary:
+      - {t: -10, level: INFO, msg: "duration: 4.1 ms  statement: SELECT * FROM line_items WHERE order_id = $1", count: 920000}
+  metrics:
+    orders-api:
+      http_p95_latency_ms:
+        unit: ms
+        points: [{t: -180, v: 180}, {t: -70, v: 210}, {t: -40, v: 980}, {t: -18, v: 2600}, {t: 0, v: 3100}]
+      db_queries_per_request:
+        unit: queries
+        points: [{t: -180, v: 3}, {t: -70, v: 14}, {t: -40, v: 190}, {t: 0, v: 470}]
+      requests_per_s:
+        unit: req/s
+        points: [{t: -180, v: 880}, {t: 0, v: 870}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -180, v: 34}, {t: 0, v: 41}]
+    postgres-primary:
+      queries_per_s:
+        unit: queries/s
+        points: [{t: -180, v: 2600}, {t: -70, v: 12000}, {t: 0, v: 408000}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -180, v: 24}, {t: -40, v: 61}, {t: 0, v: 88}]
+      mean_query_duration_ms:
+        unit: ms
+        points: [{t: -180, v: 3.9}, {t: 0, v: 4.1}]
+      active_connections:
+        unit: connections
+        points: [{t: -180, v: 120}, {t: 0, v: 188}]
+      max_connections:
+        unit: connections
+        points: [{t: -180, v: 400}, {t: 0, v: 400}]
+  k8s:
+    - kind: Deployment
+      name: orders-api
+      namespace: prod
+      spec:
+        replicas: 10
+        image: "registry.internal/orders-api:v11.4.0"
+        resources: {requests: {cpu: "1", memory: "1Gi"}, limits: {cpu: "2", memory: "2Gi"}}
+      status: {readyReplicas: 10, restarts_last_hour: 0}
+      events: []
+  runbooks:
+    - id: RB-035
+      title: "N+1 query patterns"
+      tags: [database, n+1, query, orm, latency, flag, rollout]
+      body: >-
+        Individually fast queries in enormous volume look nothing like a slow
+        query -- mean duration stays flat while queries per second multiplies.
+        Check db_queries_per_request: a value that scales with the size of the
+        returned collection is an N+1. Latency correlating with account size is
+        the classic tell. Disabling the responsible flag is the fastest fix and
+        is lower risk than a rollback when the flag is the only change.
+ground_truth:
+  root_cause: >-
+    The orders_enrich_line_items flag, rolled from 5% to 100% over the hour
+    before the alert, issues one query per line item instead of a single batched
+    fetch. Queries per request climbed from 3 to 470 and Postgres query volume
+    from 2600/s to 408000/s while mean query duration stayed flat at 4ms, so this
+    is query volume rather than slow queries. Latency scales with account size
+    because larger orders have more line items.
+  must_include:
+    - ["n+1", "one query per", "per line item", "queries per request", "query volume"]
+    - ["flag", "orders_enrich_line_items", "rollout", "100%"]
+    - ["line_items", "line item", "batch", "not slow", "duration stayed", "4ms", "4.1"]
+  must_not_include:
+    - ["slow query", "missing index", "postgres needs more cpu", "connection pool"]
+  expected_actions: [disable_feature_flag, rollback_deploy]
+  red_herrings:
+    - "Postgres CPU at 88% invites a 'database is undersized' conclusion; it is a symptom of the query flood"
+    - "the deploy was 3 hours earlier and shipped the flag off, so the deploy timestamp does not line up with onset"
