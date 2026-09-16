@@ -29,6 +29,55 @@ from .world import Scenario, load_scenario
 
 MODEL = "claude-opus-5"
 
+# Anything matching these means every scenario will fail the same way, so the
+# harness should stop rather than produce thirty identical failures.
+_AUTH_MARKERS = (
+    "could not resolve authentication",
+    "authentication_error",
+    "invalid x-api-key",
+    "invalid bearer token",
+    "permission_error",
+)
+_CONFIG_MARKERS = ("not_found_error", "model:", "invalid_request_error")
+
+
+def _leaves(exc: BaseException) -> list[BaseException]:
+    """Flatten anyio/asyncio TaskGroup ExceptionGroups down to real errors.
+
+    Without this every failure inside the MCP task group is reported as
+    "unhandled errors in a TaskGroup (1 sub-exception)", which names nothing.
+    """
+    if isinstance(exc, BaseExceptionGroup):
+        found: list[BaseException] = []
+        for sub in exc.exceptions:
+            found.extend(_leaves(sub))
+        return found or [exc]
+    return [exc]
+
+
+def describe_exception(exc: BaseException) -> tuple[str, str]:
+    """Return (human-readable message, error kind) for a caught exception."""
+    leaves = _leaves(exc)
+    message = "; ".join(f"{type(e).__name__}: {e}" for e in leaves)
+    lowered = message.lower()
+    if any(marker in lowered for marker in _AUTH_MARKERS):
+        return message, "auth"
+    if any(marker in lowered for marker in _CONFIG_MARKERS):
+        return message, "config"
+    return message, "other"
+
+
+def credentials_available() -> bool:
+    """Whether the SDK can resolve any credential without making a request."""
+    probe = AsyncAnthropic()
+    if probe.api_key or getattr(probe, "auth_token", None):
+        return True
+    # OAuth profiles and workload identity federation resolve through headers.
+    try:
+        return bool(probe.auth_headers)
+    except Exception:
+        return False
+
 # Opus 5 list price, USD per million tokens.
 PRICE_IN, PRICE_OUT, PRICE_CACHE_READ = 5.00, 25.00, 0.50
 
@@ -76,6 +125,7 @@ class AgentRun:
     cache_read_tokens: int = 0
     turns: int = 0
     error: str | None = None
+    error_kind: str | None = None
 
     @property
     def tool_call_count(self) -> int:
@@ -112,6 +162,7 @@ class AgentRun:
             "cache_read_tokens": self.cache_read_tokens,
             "cost_usd": round(self.cost_usd, 4),
             "error": self.error,
+            "error_kind": self.error_kind,
         }
 
 
@@ -204,8 +255,8 @@ async def diagnose(
                         f"agent finished after {run.turns} turns without calling "
                         "propose_remediation"
                     )
-    except Exception as exc:  # surfaced per-scenario; the harness keeps going
-        run.error = f"{type(exc).__name__}: {exc}"
+    except BaseException as exc:  # includes ExceptionGroup from the MCP task group
+        run.error, run.error_kind = describe_exception(exc)
     finally:
         run.elapsed_s = time.perf_counter() - started
 

@@ -17,7 +17,7 @@ import sys
 
 from . import approvals
 from .agent import _cli_event, diagnose
-from .harness import run_harness
+from .harness import HarnessAborted, run_harness
 from .scoring import score_run
 from .world import all_scenarios, load_scenario
 
@@ -48,6 +48,11 @@ async def _run(args: argparse.Namespace) -> int:
 
     if run.error:
         print(f"{RED}error: {run.error}{RESET}")
+        if run.error_kind == "auth":
+            print(f"\n{YELLOW}This is an authentication failure, not a wrong "
+                  f"diagnosis.{RESET}\n"
+                  f"  export ANTHROPIC_API_KEY=sk-ant-...\n"
+                  f"  key at https://console.anthropic.com/settings/keys")
 
     if run.proposal:
         score = score_run(run, scenario)
@@ -88,13 +93,17 @@ async def _eval(args: argparse.Namespace) -> int:
 
     print(f"{BOLD}running {total} scenarios{RESET} "
           f"(concurrency {args.concurrency}, effort {args.effort})\n")
-    payload = await run_harness(
-        args.scenarios or None,
-        concurrency=args.concurrency,
-        effort=args.effort,
-        label=args.label,
-        progress=progress,
-    )
+    try:
+        payload = await run_harness(
+            args.scenarios or None,
+            concurrency=args.concurrency,
+            effort=args.effort,
+            label=args.label,
+            progress=progress,
+        )
+    except HarnessAborted as exc:
+        print(f"\n{RED}sweep aborted{RESET}\n\n{exc}")
+        return 2
 
     s = payload["summary"]
     print(f"\n{BOLD}summary{RESET}")

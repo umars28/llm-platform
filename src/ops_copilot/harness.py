@@ -16,12 +16,20 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from .agent import diagnose
+from .agent import credentials_available, diagnose
 from .scoring import Score, score_run, summarise
 from .world import Scenario, all_scenarios, load_scenario
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNS_DIR = REPO_ROOT / "runs"
+
+
+class HarnessAborted(RuntimeError):
+    """The sweep stopped because every scenario would fail identically.
+
+    A results set of thirty auth failures reads as "0% accuracy" to anyone who
+    opens it later. Refusing to produce one is the whole point of this class.
+    """
 
 
 async def _run_one(
@@ -60,19 +68,45 @@ async def run_harness(
         else all_scenarios()
     )
 
+    if not credentials_available():
+        raise HarnessAborted(
+            "No Anthropic credentials could be resolved, so every scenario "
+            "would fail at authentication and the results would be thirty "
+            "identical errors rather than a score.\n\n"
+            "  export ANTHROPIC_API_KEY=sk-ant-...\n\n"
+            "Get a key at https://console.anthropic.com/settings/keys"
+        )
+
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir = RUNS_DIR / (f"{stamp}-{label}" if label else stamp)
     run_dir.mkdir(parents=True, exist_ok=True)
 
     semaphore = asyncio.Semaphore(concurrency)
-    results = await asyncio.gather(
+
+    # Canary: prove one scenario can reach the API before committing to the
+    # other twenty-nine. An auth or model-id mistake fails the same way every
+    # time, and discovering it once is enough.
+    first = await _run_one(scenarios[0], semaphore, run_dir, effort, model, progress)
+    if first[1].get("error_kind") in {"auth", "config"}:
+        raise HarnessAborted(
+            f"{scenarios[0].id} failed before reaching any tool, and the cause "
+            f"is not scenario-specific, so the sweep stopped after one instead "
+            f"of repeating it thirty times:\n\n  {first[1]['error']}"
+        )
+
+    rest = await asyncio.gather(
         *(
             _run_one(s, semaphore, run_dir, effort, model, progress)
-            for s in scenarios
+            for s in scenarios[1:]
         )
     )
+    results = [first, *rest]
 
     scores = [score for score, _ in results]
+    summary = summarise(scores)
+
+    # A run where nothing completed has no accuracy to report, only a fault.
+    summary["valid"] = summary["completed"] > 0
     payload = {
         "run": {
             "started_at": stamp,
@@ -81,7 +115,7 @@ async def run_harness(
             "concurrency": concurrency,
             "label": label,
         },
-        "summary": summarise(scores),
+        "summary": summary,
         "scores": [s.to_dict() for s in scores],
         "traces": [trace for _, trace in results],
     }
@@ -98,6 +132,15 @@ def render_markdown(payload: dict[str, Any]) -> str:
     lines = [
         f"# Ops Copilot harness run {meta['started_at']}",
         "",
+    ]
+    if not summary.get("valid", True):
+        lines += [
+            "> **These are not results.** Every scenario errored before "
+            "reaching a diagnosis, so the rates below are all zero because "
+            "nothing ran, not because the agent was wrong. Do not quote them.",
+            "",
+        ]
+    lines += [
         f"Model `{meta['model']}` at effort `{meta['effort']}`, "
         f"{summary['scenarios']} scenarios.",
         "",

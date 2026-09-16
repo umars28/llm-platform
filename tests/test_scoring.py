@@ -113,3 +113,45 @@ def test_summary_aggregates_rates_and_categories():
 
 def test_summary_of_nothing_does_not_divide_by_zero():
     assert summarise([]) == {"scenarios": 0}
+
+
+def test_exception_groups_are_flattened_to_the_real_error():
+    """A TaskGroup failure must name its cause, not "1 sub-exception"."""
+    from ops_copilot.agent import describe_exception
+
+    nested = BaseExceptionGroup(
+        "unhandled errors in a TaskGroup",
+        [BaseExceptionGroup("inner", [TypeError("Could not resolve authentication method")])],
+    )
+    message, kind = describe_exception(nested)
+    assert "Could not resolve authentication method" in message
+    assert "sub-exception" not in message
+    assert kind == "auth"
+
+
+def test_ordinary_errors_are_not_classified_as_systemic():
+    from ops_copilot.agent import describe_exception
+
+    message, kind = describe_exception(ValueError("scenario file is malformed"))
+    assert kind == "other"
+    assert "scenario file is malformed" in message
+
+
+def test_an_all_errored_run_is_marked_invalid():
+    """Zero rates from zero completions must not read as zero accuracy."""
+    from ops_copilot.harness import render_markdown
+
+    payload = {
+        "run": {"started_at": "x", "model": "m", "effort": "high"},
+        "summary": {
+            "scenarios": 2, "completed": 0, "errored": 2, "valid": False,
+            "root_cause_hit_rate": 0.0, "action_match_rate": 0.0,
+            "clean_rate": 0.0, "strict_correct_rate": 0.0, "over_reach_count": 0,
+            "mean_read_tool_calls": 0.0, "mean_turns": 0.0, "mean_elapsed_s": 0.0,
+            "total_cost_usd": 0.0, "mean_cost_usd": 0.0, "by_category": {},
+        },
+        "scores": [],
+    }
+    rendered = render_markdown(payload)
+    assert "These are not results" in rendered
+    assert "Do not quote them" in rendered
