@@ -261,18 +261,22 @@ class World:
 
     # -- runbooks ---------------------------------------------------------
 
-    def search_runbooks(self, query: str, limit: int = 3) -> list[dict[str, Any]]:
-        """Keyword-overlap search.
+    def runbooks(self) -> list[dict[str, Any]]:
+        """Shared runbooks plus this scenario's own, by id."""
+        return _merge_by_id(
+            common_catalogue()["runbooks"], self.scenario.world.get("runbooks", [])
+        )
 
-        Deliberately dumb: P2 replaces this with a real retriever, and keeping
-        the interface stable means the agent side needs no changes when it does.
+    def search_runbooks(self, query: str, limit: int = 3) -> list[dict[str, Any]]:
+        """Keyword-overlap search, kept as the fallback path.
+
+        `retrieval.search` is what the tool calls now; this remains because it
+        needs no model and no database, so an investigation still works when
+        neither is present.
         """
         terms = {t for t in re.findall(r"[a-z0-9]+", query.lower()) if len(t) > 2}
         scored = []
-        books = _merge_by_id(
-            common_catalogue()["runbooks"], self.scenario.world.get("runbooks", [])
-        )
-        for book in books:
+        for book in self.runbooks():
             # Tags are coerced because YAML parses bare tokens by type -- a tag
             # of 503 or 429 arrives as an int and would otherwise crash the
             # join mid-investigation.

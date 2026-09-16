@@ -18,6 +18,10 @@ ops-copilot-server = "ops_copilot.server:run"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+# Upgrades search_runbook from keyword overlap to semantic and hybrid retrieval.
+# Optional on purpose: without it the agent still investigates, just with a
+# weaker runbook search. Install from https://github.com/umars28/runbook-rag
+retrieval = ["runbook-rag>=0.1.0"]
 
 [build-system]
 requires = ["hatchling"]

@@ -225,12 +225,42 @@ twenty-five is a real decision.
 calls, turn count, token usage and wall time. How much work the agent did to
 reach an answer is as much a quality signal as whether the answer was right.
 
+## Runbook retrieval
+
+`search_runbook` returns two separately labelled sources.
+
+`results` are the environment's own runbooks -- its connection budgets, its
+pre-approved actions, its conventions. They are authoritative here and are
+always searched.
+
+`reference` is real published Kubernetes documentation, retrieved by
+[runbook-rag](https://github.com/umars28/runbook-rag) using the hybrid
+configuration that project measured. It is background knowledge and says nothing
+about this cluster's limits. The two are never merged into one ranked list,
+because doing so invites the specific wrong inference of reading a capacity
+figure out of upstream documentation as though it were this environment's.
+
+Reference results below a cosine similarity of 0.70 are dropped rather than
+shown. The corpus genuinely does not cover application concerns like connection
+pools or retry policy, and returning its best guess anyway spends the agent's
+context and invites a wrong turn. The floor comes from the measured separation:
+relevant passages score 0.78-0.84, and the best available match for an
+out-of-domain question scores 0.63-0.64.
+
+Both upgrades degrade rather than fail. Semantic search over the environment
+runbooks needs only the embedding model and no database; reference lookup needs
+the corpus indexed. Without either, the tool falls back to keyword overlap and
+says which backend is missing, so a retrieval problem never ends an
+investigation.
+
+```bash
+pip install -e ".[retrieval]"   # optional; see the runbook-rag repository
+```
+
 ## Where this goes next
 
-The `search_runbook` tool is a keyword matcher behind a stable interface,
-waiting to be replaced by a real retriever. The traces and the deterministic
-scores are the substrate an LLM-judged eval suite and a cost-optimisation pass
-need. Neither is in scope here.
+The traces and the deterministic scores are the substrate an LLM-judged eval
+suite and a cost-optimisation pass need. Neither is in scope here.
 
 ## Licence
 

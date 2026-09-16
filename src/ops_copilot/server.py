@@ -25,6 +25,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
+from . import retrieval
 from .world import World, load_scenario
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -156,16 +157,23 @@ def describe_k8s_resource(kind: str, name: str, namespace: str = "prod") -> dict
 
 @server.tool()
 def search_runbook(query: str, limit: int = 3) -> dict[str, Any]:
-    """Search the operational runbooks by keyword.
+    """Search the operational runbooks, and published Kubernetes documentation.
 
-    Runbooks carry the operating limits you cannot infer from telemetry alone --
-    connection budgets, which actions are pre-approved, when rollback is expected.
+    `results` are this environment's own runbooks. They carry the operating
+    limits you cannot infer from telemetry -- connection budgets, which actions
+    are pre-approved, when rollback is expected -- and they are authoritative
+    here.
+
+    `reference` is real published Kubernetes documentation, present only when a
+    corpus is indexed. Treat it as background: it explains how Kubernetes
+    behaves in general, and says nothing about this cluster's limits or
+    conventions. Where the two disagree about a number, `results` wins.
 
     Args:
-        query: Free-text description of the symptom.
-        limit: Maximum runbooks to return.
+        query: Free-text description of the symptom, not a keyword list.
+        limit: Maximum entries to return from each source.
     """
-    return {"query": query, "results": WORLD.search_runbooks(query, limit)}
+    return retrieval.search(query, WORLD.runbooks(), limit)
 
 
 @server.tool()
