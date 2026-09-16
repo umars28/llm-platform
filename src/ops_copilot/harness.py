@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from .agent import MODEL, credentials_available, diagnose
+from .agent import MODEL, credentials_available, diagnose, summarise_error
 from .scoring import Score, score_run, summarise
 from .world import Scenario, all_scenarios, load_scenario
 
@@ -91,7 +91,8 @@ async def run_harness(
         raise HarnessAborted(
             f"{scenarios[0].id} failed before reaching any tool, and the cause "
             f"is not scenario-specific, so the sweep stopped after one instead "
-            f"of repeating it thirty times:\n\n  {first[1]['error']}"
+            f"of repeating it {len(scenarios)} times:\n\n  "
+            f"{summarise_error(first[1]['error'])}"
         )
 
     rest = await asyncio.gather(
