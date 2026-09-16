@@ -57,14 +57,19 @@ def test_grades_are_only_one_or_two():
 
 
 def test_queries_do_not_simply_restate_the_document_title():
-    """A retriever that only works on title-shaped queries has not solved anything."""
+    """A retriever that only works on title-shaped queries has not solved anything.
+
+    Single-word titles are exempt. "Service", "Jobs" and "Volumes" are ordinary
+    English that any symptom sentence may contain, so matching one says nothing
+    about whether the query was written lazily.
+    """
     titles = {d.path.removeprefix("content/en/docs/"): d.title.lower() for d in load_saved()}
     lazy = []
     for entry in RAW:
         text = entry["query"].lower()
         for path in entry["relevant"]:
             title = titles.get(path, "")
-            if title and title in text:
+            if len(title.split()) > 1 and title in text:
                 lazy.append(f"{entry['id']} restates {title!r}")
     assert lazy == []
 
