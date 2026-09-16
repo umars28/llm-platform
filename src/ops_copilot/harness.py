@@ -87,7 +87,7 @@ async def run_harness(
     # other twenty-nine. An auth or model-id mistake fails the same way every
     # time, and discovering it once is enough.
     first = await _run_one(scenarios[0], semaphore, run_dir, effort, model, progress)
-    if first[1].get("error_kind") in {"auth", "config"}:
+    if first[1].get("error_kind") in {"auth", "config", "billing"}:
         raise HarnessAborted(
             f"{scenarios[0].id} failed before reaching any tool, and the cause "
             f"is not scenario-specific, so the sweep stopped after one instead "

@@ -184,3 +184,27 @@ def test_a_gateway_base_url_satisfies_the_preflight(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://openrouter.ai/api")
     assert credentials_available()
+
+
+def test_billing_failures_are_systemic_not_scenario_specific():
+    """A 402 fails every scenario the same way, so the sweep must stop."""
+    from ops_copilot.agent import describe_exception
+
+    class APIStatusError(Exception):
+        pass
+
+    exc = APIStatusError(
+        "Error code: 402 - {'type': 'error', 'error': {'type': 'billing_error', "
+        "'message': 'This request requires more credits, or fewer max_tokens'}}"
+    )
+    assert describe_exception(exc)[1] == "billing"
+
+
+def test_repeated_provider_errors_are_truncated_for_display():
+    from ops_copilot.agent import summarise_error
+
+    noisy = "billing_error: no credits. " * 60
+    trimmed = summarise_error(noisy)
+    assert len(trimmed) < 450
+    assert trimmed.endswith("[truncated]")
+    assert summarise_error("short message") == "short message"

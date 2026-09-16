@@ -57,6 +57,16 @@ _AUTH_MARKERS = (
     "permission_error",
 )
 _CONFIG_MARKERS = ("not_found_error", "model:", "invalid_request_error")
+# Running out of credit fails every scenario identically, exactly like bad
+# credentials. Found the hard way: a 402 slipped past the canary as "other".
+_BILLING_MARKERS = (
+    "billing_error",
+    "payment_required",
+    "insufficient_quota",
+    "credit balance",
+    "more credits",
+    "402",
+)
 
 
 def _leaves(exc: BaseException) -> list[BaseException]:
@@ -73,6 +83,17 @@ def _leaves(exc: BaseException) -> list[BaseException]:
     return [exc]
 
 
+def summarise_error(message: str, limit: int = 400) -> str:
+    """Trim a provider error to its first useful sentence.
+
+    Gateways echo the same failure back several times inside `previous_errors`,
+    which turns a one-line billing problem into a wall of repeated JSON.
+    """
+    if len(message) <= limit:
+        return message
+    return message[:limit].rstrip() + " ... [truncated]"
+
+
 def describe_exception(exc: BaseException) -> tuple[str, str]:
     """Return (human-readable message, error kind) for a caught exception."""
     leaves = _leaves(exc)
@@ -80,6 +101,8 @@ def describe_exception(exc: BaseException) -> tuple[str, str]:
     lowered = message.lower()
     if any(marker in lowered for marker in _AUTH_MARKERS):
         return message, "auth"
+    if any(marker in lowered for marker in _BILLING_MARKERS):
+        return message, "billing"
     if any(marker in lowered for marker in _CONFIG_MARKERS):
         return message, "config"
     return message, "other"

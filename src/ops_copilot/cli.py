@@ -16,7 +16,7 @@ import json
 import sys
 
 from . import approvals
-from .agent import _cli_event, diagnose
+from .agent import _cli_event, diagnose, summarise_error
 from .harness import HarnessAborted, run_harness
 from .scoring import score_run
 from .world import all_scenarios, load_scenario
@@ -47,7 +47,12 @@ async def _run(args: argparse.Namespace) -> int:
     run = await diagnose(scenario.id, effort=args.effort, on_event=_cli_event)
 
     if run.error:
-        print(f"{RED}error: {run.error}{RESET}")
+        print(f"{RED}error: {summarise_error(run.error)}{RESET}")
+        if run.error_kind == "billing":
+            print(f"\n{YELLOW}This is a credit/billing limit, not a wrong "
+                  f"diagnosis.{RESET}\n"
+                  f"  Add credits, or raise the key's own spend limit if it has one.\n"
+                  f"  A full 30-scenario sweep needs roughly $6.")
         if run.error_kind == "auth":
             print(f"\n{YELLOW}This is an authentication failure, not a wrong "
                   f"diagnosis.{RESET}\n"
