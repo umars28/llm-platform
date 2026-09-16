@@ -1,0 +1,22 @@
+# Postgres with pgvector, for anyone who would rather not install it locally.
+# The project connects through RUNBOOK_RAG_DSN, so a local Homebrew Postgres and
+# this container are interchangeable.
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: runbook
+      POSTGRES_PASSWORD: runbook
+      POSTGRES_DB: runbook_rag
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runbook -d runbook_rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:

@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+.pytest_cache/
+
+# Fetched corpus and derived artefacts are reproducible, not source.
+corpus/raw/
+corpus/chunks/
+.qdrant/
+runs/
+.cache/
