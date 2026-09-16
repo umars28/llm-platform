@@ -273,8 +273,12 @@ class World:
             common_catalogue()["runbooks"], self.scenario.world.get("runbooks", [])
         )
         for book in books:
+            # Tags are coerced because YAML parses bare tokens by type -- a tag
+            # of 503 or 429 arrives as an int and would otherwise crash the
+            # join mid-investigation.
+            tags = " ".join(str(t) for t in book.get("tags", []))
             haystack = " ".join(
-                [book.get("title", ""), book.get("body", ""), " ".join(book.get("tags", []))]
+                [book.get("title", ""), book.get("body", ""), tags]
             ).lower()
             tokens = set(re.findall(r"[a-z0-9]+", haystack))
             overlap = len(terms & tokens)

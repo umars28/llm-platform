@@ -70,7 +70,7 @@ world:
   runbooks:
     - id: RB-049
       title: "Load balancer health checks"
-      tags: [load-balancer, health-check, readiness, targets, 503, ingress, drain]
+      tags: [load-balancer, health-check, readiness, targets, '503', ingress, drain]
       body: >-
         Pods passing their Kubernetes readiness probe while the load balancer
         reports zero healthy targets means the two are checking different things.

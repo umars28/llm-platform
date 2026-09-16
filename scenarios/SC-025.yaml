@@ -66,7 +66,7 @@ world:
   runbooks:
     - id: RB-052
       title: "Shared quota and traffic priority"
-      tags: [quota, rate-limit, 429, third-party, provider, priority, shedding]
+      tags: [quota, rate-limit, '429', third-party, provider, priority, shedding]
       body: >-
         A shared outbound quota has no notion of importance: whichever caller
         arrives first consumes it. When a low-priority bulk sender saturates the

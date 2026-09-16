@@ -79,3 +79,32 @@ def test_no_action_required_is_a_real_expected_answer_somewhere():
 def test_catalogue_action_ids_are_unique():
     ids = [a["id"] for a in common_catalogue()["actions"]]
     assert len(ids) == len(set(ids))
+
+
+@pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda s: s.id)
+def test_every_runbook_is_searchable(scenario):
+    """Runbook search must survive whatever type YAML parsed a tag as.
+
+    Bare tokens like 503 or 429 arrive as ints, which crashed the string join
+    only for the scenarios that happened to use one.
+    """
+    world = World(scenario)
+    for book in scenario.world.get("runbooks", []):
+        hits = world.search_runbooks(book["title"])
+        assert any(h["id"] == book["id"] for h in hits), (
+            f"{scenario.id}: runbook {book['id']} cannot be found by its own title"
+        )
+
+
+def test_searching_tolerates_non_string_tags():
+    from ops_copilot.world import Scenario, World
+    from pathlib import Path
+
+    scenario = Scenario(
+        id="SC-TEST", title="t", category="test",
+        alert={"fired_at": "2026-01-01T00:00:00Z", "service": "x"},
+        world={"runbooks": [{"id": "RB-X", "title": "Quota limits",
+                             "body": "b", "tags": [429, 503, "quota", True]}]},
+        ground_truth={}, path=Path("SC-TEST.yaml"),
+    )
+    assert World(scenario).search_runbooks("quota 429")
