@@ -158,7 +158,13 @@ def header_chunks(doc: Document, size: int = 220, overlap: int = 40) -> list[Chu
 
     Each chunk is prefixed with its document title and heading, so an embedding
     of a passage carries the topic it belongs to even when the passage itself
-    never names it. That prefix is the whole reason this strategy tends to win.
+    never names it.
+
+    That prefix was expected to win outright. Measured, it does not: it lifts
+    recall@10 by about 8% over fixed windows while costing a little recall@5 and
+    MRR. Smaller, more numerous chunks surface more distinct documents deeper in
+    the list but dilute the top of it. Which trade is right depends on how many
+    passages the consumer can actually read.
     """
     chunks: list[Chunk] = []
     for heading, body in _sections(doc.content):
