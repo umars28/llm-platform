@@ -9,8 +9,11 @@ Four ways to fail, because they are different problems:
 threshold -- a named case going from pass to fail is a specific regression with
 a specific cause, and averaging it away is how suites stop catching things.
 
-**The aggregate score drops more than the tolerance.** Catches broad erosion
-that no single case failure explains.
+**The aggregate score drops more than the tolerance.** Secondary to the check
+above rather than parallel to it: a `Result` passes only when every check
+passes, so a case cannot slide from 1.0 to 0.9 and still be passing. What this
+catches is an already-failing case losing further ground, which the pass/fail
+comparison would otherwise report as unchanged.
 
 **Cost rises more than the tolerance.** A change that improves quality and
 triples the bill is a regression to whoever pays for it.

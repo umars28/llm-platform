@@ -46,11 +46,19 @@ def test_a_single_regression_is_never_averaged_away():
     assert not check_gate(results, base, JUDGE).passed
 
 
-def test_a_broad_score_drop_fails_even_with_no_case_flipping():
-    results = [result("C-1", True, score=0.90)]
-    base = Baseline(judge_version=JUDGE, cases={"C-1": True}, scores={"C-1": 1.0})
+def test_a_case_degrading_further_while_already_failing_is_caught():
+    """The only way the score gate bites, given how pass/fail is defined.
+
+    A Result passes only when every check passes, so any score below 1.0 already
+    means a failing check. The score gate therefore cannot catch a passing case
+    sliding -- it catches an already-failing case losing more ground, which the
+    pass/fail comparison alone would report as unchanged.
+    """
+    results = [result("C-1", False, score=0.40)]
+    base = Baseline(judge_version=JUDGE, cases={"C-1": False}, scores={"C-1": 0.80})
     gate = check_gate(results, base, JUDGE, score_tolerance=0.02)
     assert not gate.passed
+    assert gate.regressions == []  # it was already failing
     assert "mean score fell" in gate.reasons[0]
 
 
@@ -93,8 +101,8 @@ def test_a_cost_fall_never_fails():
 
 
 def test_a_score_drop_inside_tolerance_passes():
-    results = [result("C-1", True, score=0.99)]
-    base = Baseline(judge_version=JUDGE, cases={"C-1": True}, scores={"C-1": 1.0})
+    results = [result("C-1", False, score=0.79)]
+    base = Baseline(judge_version=JUDGE, cases={"C-1": False}, scores={"C-1": 0.80})
     assert check_gate(results, base, JUDGE, score_tolerance=0.02).passed
 
 
