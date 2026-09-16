@@ -1,0 +1,517 @@
+# Golden query set.
+#
+# Queries are written the way an engineer under pressure types them: a symptom,
+# an error string, a half-remembered flag. They are deliberately NOT phrased as
+# the document titles they should match, because a retriever that only works
+# when the query already uses the document's vocabulary has not solved anything.
+#
+# Grades are graded relevance, which is what nDCG needs:
+#   2 = answers the question directly; an engineer would stop reading here
+#   1 = genuinely useful supporting context, but not the answer on its own
+#
+# Paths are relative to content/en/docs/ in kubernetes/website. Every path is
+# validated against the ingested corpus by tests/test_golden.py, so a typo or a
+# page that moved upstream fails the suite instead of silently scoring zero.
+
+queries:
+  # -- pod lifecycle and crashes ---------------------------------------
+  - id: Q-001
+    query: my pod keeps restarting with CrashLoopBackOff, how do I work out why
+    facet: pod-failure
+    relevant:
+      concepts/workloads/pods/pod-lifecycle.md: 2
+      tasks/debug/debug-application/debug-pods.md: 2
+      tasks/debug/debug-application/determine-reason-pod-failure.md: 1
+
+  - id: Q-002
+    query: container was killed and the reason says OOMKilled
+    facet: pod-failure
+    relevant:
+      tasks/debug/debug-application/determine-reason-pod-failure.md: 2
+      concepts/configuration/manage-resources-containers.md: 2
+      concepts/workloads/pods/pod-lifecycle.md: 1
+
+  - id: Q-003
+    query: pod stuck in Pending and never gets scheduled anywhere
+    facet: scheduling
+    relevant:
+      tasks/debug/debug-application/debug-pods.md: 2
+      concepts/scheduling-eviction/kube-scheduler.md: 1
+      concepts/scheduling-eviction/assign-pod-node.md: 1
+
+  - id: Q-004
+    query: how do I get a shell inside a running container to poke around
+    facet: debugging
+    relevant:
+      tasks/debug/debug-application/get-shell-running-container.md: 2
+      concepts/workloads/pods/ephemeral-containers.md: 1
+
+  - id: Q-005
+    query: the image has no shell so I cannot exec into it to debug
+    facet: debugging
+    relevant:
+      concepts/workloads/pods/ephemeral-containers.md: 2
+      tasks/debug/debug-application/debug-running-pod.md: 2
+
+  - id: Q-006
+    query: my init container never finishes and the pod waits forever
+    facet: pod-failure
+    relevant:
+      tasks/debug/debug-application/debug-init-containers.md: 2
+      concepts/workloads/pods/init-containers.md: 2
+
+  - id: Q-007
+    query: what is the difference between liveness and readiness checks
+    facet: probes
+    relevant:
+      concepts/workloads/pods/probes.md: 2
+      tasks/configure-pod-container/configure-liveness-readiness-startup-probes.md: 2
+
+  - id: Q-008
+    query: my app is slow to boot and gets killed before it finishes starting
+    facet: probes
+    relevant:
+      tasks/configure-pod-container/configure-liveness-readiness-startup-probes.md: 2
+      concepts/workloads/pods/probes.md: 2
+
+  - id: Q-009
+    query: logging sidecar should shut down after the main process exits
+    facet: pod-design
+    relevant:
+      concepts/workloads/pods/sidecar-containers.md: 2
+      concepts/workloads/pods/init-containers.md: 1
+
+  - id: Q-010
+    query: run something right before a container is torn down
+    facet: pod-design
+    relevant:
+      concepts/containers/container-lifecycle-hooks.md: 2
+      tasks/configure-pod-container/attach-handler-lifecycle-event.md: 2
+
+  # -- resources, limits and eviction ----------------------------------
+  - id: Q-011
+    query: difference between what I request and what I cap a container at
+    facet: resources
+    relevant:
+      concepts/configuration/manage-resources-containers.md: 2
+      tasks/configure-pod-container/assign-memory-resource.md: 1
+      tasks/configure-pod-container/assign-cpu-resource.md: 1
+
+  - id: Q-012
+    query: kubelet is evicting pods because the node ran low on memory
+    facet: eviction
+    relevant:
+      concepts/scheduling-eviction/node-pressure-eviction.md: 2
+      concepts/workloads/pods/pod-qos.md: 2
+
+  - id: Q-013
+    query: which pods get killed first when a node runs out of room
+    facet: eviction
+    relevant:
+      concepts/workloads/pods/pod-qos.md: 2
+      concepts/scheduling-eviction/node-pressure-eviction.md: 2
+      tasks/configure-pod-container/quality-service-pod.md: 1
+
+  - id: Q-014
+    query: node disk filled up and workloads got thrown off it
+    facet: eviction
+    relevant:
+      concepts/scheduling-eviction/node-pressure-eviction.md: 2
+      concepts/storage/ephemeral-storage.md: 2
+
+  - id: Q-015
+    query: stop one team from consuming the entire cluster
+    facet: quota
+    relevant:
+      concepts/policy/resource-quotas.md: 2
+      tasks/administer-cluster/manage-resources/quota-memory-cpu-namespace.md: 2
+      concepts/policy/limit-range.md: 1
+
+  - id: Q-016
+    query: set a default cpu ceiling for every container in a namespace
+    facet: quota
+    relevant:
+      tasks/administer-cluster/manage-resources/cpu-default-namespace.md: 2
+      concepts/policy/limit-range.md: 2
+
+  - id: Q-017
+    query: change memory on a running container without recreating the pod
+    facet: resources
+    relevant:
+      tasks/configure-pod-container/resize-container-resources.md: 2
+      tasks/configure-pod-container/resize-pod-resources.md: 1
+
+  - id: Q-018
+    query: reserve capacity on each node for the kubelet and the OS itself
+    facet: resources
+    relevant:
+      tasks/administer-cluster/reserve-compute-resources.md: 2
+
+  - id: Q-019
+    query: too many processes spawned on one node starved the others
+    facet: resources
+    relevant:
+      concepts/policy/pid-limiting.md: 2
+
+  - id: Q-020
+    query: important pod keeps losing its slot to less important work
+    facet: scheduling
+    relevant:
+      concepts/scheduling-eviction/pod-priority-preemption.md: 2
+
+  # -- scheduling and placement ----------------------------------------
+  - id: Q-021
+    query: keep workloads off a node without deleting them
+    facet: scheduling
+    relevant:
+      concepts/scheduling-eviction/taint-and-toleration.md: 2
+      tasks/administer-cluster/safely-drain-node.md: 2
+
+  - id: Q-022
+    query: I need to take a machine out for maintenance safely
+    facet: node-ops
+    relevant:
+      tasks/administer-cluster/safely-drain-node.md: 2
+      concepts/workloads/pods/disruptions.md: 1
+
+  - id: Q-023
+    query: pin a workload to nodes with particular hardware
+    facet: scheduling
+    relevant:
+      tasks/configure-pod-container/assign-pods-nodes-using-node-affinity.md: 2
+      concepts/scheduling-eviction/assign-pod-node.md: 2
+      tasks/configure-pod-container/assign-pods-nodes.md: 1
+
+  - id: Q-024
+    query: all my replicas landed on the same machine and it died
+    facet: scheduling
+    relevant:
+      concepts/scheduling-eviction/topology-spread-constraints.md: 2
+      concepts/scheduling-eviction/assign-pod-node.md: 1
+
+  - id: Q-025
+    query: make sure a rolling upgrade never takes down too many at once
+    facet: availability
+    relevant:
+      tasks/run-application/configure-pdb.md: 2
+      concepts/workloads/pods/disruptions.md: 2
+
+  - id: Q-026
+    query: scheduler is too slow in a big cluster
+    facet: scheduling
+    relevant:
+      concepts/scheduling-eviction/scheduler-perf-tuning.md: 2
+
+  # -- networking and DNS ----------------------------------------------
+  - id: Q-027
+    query: service name does not resolve from inside a pod
+    facet: dns
+    relevant:
+      tasks/administer-cluster/dns-debugging-resolution.md: 2
+      concepts/services-networking/dns-pod-service.md: 2
+
+  - id: Q-028
+    query: short names resolve but fully qualified ones do not, or the reverse
+    facet: dns
+    relevant:
+      concepts/services-networking/dns-pod-service.md: 2
+      tasks/administer-cluster/dns-debugging-resolution.md: 2
+
+  - id: Q-029
+    query: point some lookups at our own upstream nameserver
+    facet: dns
+    relevant:
+      tasks/administer-cluster/dns-custom-nameservers.md: 2
+      tasks/administer-cluster/coredns.md: 1
+
+  - id: Q-030
+    query: traffic between two services started timing out with no errors on either side
+    facet: network-policy
+    relevant:
+      concepts/services-networking/network-policies.md: 2
+      tasks/administer-cluster/declare-network-policy.md: 2
+
+  - id: Q-031
+    query: deny everything by default and allow only what I list
+    facet: network-policy
+    relevant:
+      concepts/services-networking/network-policies.md: 2
+      tasks/administer-cluster/declare-network-policy.md: 2
+
+  - id: Q-032
+    query: my service has no endpoints and requests go nowhere
+    facet: services
+    relevant:
+      tasks/debug/debug-application/debug-service.md: 2
+      concepts/services-networking/service.md: 1
+      concepts/services-networking/endpoint-slices.md: 1
+
+  - id: Q-033
+    query: expose an app on a real address outside the cluster
+    facet: services
+    relevant:
+      tasks/access-application-cluster/create-external-load-balancer.md: 2
+      concepts/services-networking/service.md: 1
+      concepts/services-networking/ingress.md: 1
+
+  - id: Q-034
+    query: route by hostname and path to different backends
+    facet: ingress
+    relevant:
+      concepts/services-networking/ingress.md: 2
+      concepts/services-networking/ingress-controllers.md: 1
+
+  - id: Q-035
+    query: reach a pod from my laptop without exposing it publicly
+    facet: access
+    relevant:
+      tasks/access-application-cluster/port-forward-access-application-cluster.md: 2
+
+  - id: Q-036
+    query: keep traffic in the same availability zone to cut cross-zone cost
+    facet: services
+    relevant:
+      concepts/services-networking/topology-aware-routing.md: 2
+      concepts/services-networking/service-traffic-policy.md: 1
+
+  # -- scaling ----------------------------------------------------------
+  - id: Q-037
+    query: add replicas automatically when load goes up
+    facet: autoscaling
+    relevant:
+      concepts/workloads/autoscaling/horizontal-pod-autoscale.md: 2
+      tasks/run-application/horizontal-pod-autoscale-walkthrough.md: 2
+
+  - id: Q-038
+    query: autoscaler will not add any more instances even though it is saturated
+    facet: autoscaling
+    relevant:
+      concepts/workloads/autoscaling/horizontal-pod-autoscale.md: 2
+      tasks/run-application/horizontal-pod-autoscale-walkthrough.md: 1
+
+  - id: Q-039
+    query: scale on something other than processor usage
+    facet: autoscaling
+    relevant:
+      concepts/workloads/autoscaling/horizontal-pod-autoscale.md: 2
+      tasks/debug/debug-cluster/resource-metrics-pipeline.md: 1
+
+  - id: Q-040
+    query: grow and shrink the container size itself rather than the count
+    facet: autoscaling
+    relevant:
+      concepts/workloads/autoscaling/vertical-pod-autoscale.md: 2
+
+  - id: Q-041
+    query: add machines to the cluster when pods cannot fit
+    facet: autoscaling
+    relevant:
+      concepts/cluster-administration/node-autoscaling.md: 2
+      tasks/administer-cluster/node-overprovisioning.md: 1
+
+  # -- storage ----------------------------------------------------------
+  - id: Q-042
+    query: volume claim sits Pending and nothing binds to it
+    facet: storage
+    relevant:
+      concepts/storage/persistent-volumes.md: 2
+      concepts/storage/dynamic-provisioning.md: 2
+      concepts/storage/storage-capacity.md: 1
+
+  - id: Q-043
+    query: make disks get created on demand instead of by hand
+    facet: storage
+    relevant:
+      concepts/storage/dynamic-provisioning.md: 2
+      concepts/storage/storage-classes.md: 2
+
+  - id: Q-044
+    query: data disappeared after I deleted the claim
+    facet: storage
+    relevant:
+      tasks/administer-cluster/change-pv-reclaim-policy.md: 2
+      concepts/storage/persistent-volumes.md: 2
+
+  - id: Q-045
+    query: only one pod at a time should be able to write to this disk
+    facet: storage
+    relevant:
+      tasks/administer-cluster/change-pv-access-mode-readwriteoncepod.md: 2
+      concepts/storage/persistent-volumes.md: 1
+
+  - id: Q-046
+    query: cap how much disk a namespace can claim
+    facet: storage
+    relevant:
+      tasks/administer-cluster/limit-storage-consumption.md: 2
+      concepts/policy/resource-quotas.md: 1
+
+  - id: Q-047
+    query: node cannot take any more volumes attached to it
+    facet: storage
+    relevant:
+      concepts/storage/storage-limits.md: 2
+
+  - id: Q-048
+    query: point-in-time copy of a volume I can restore from
+    facet: storage
+    relevant:
+      concepts/storage/volume-snapshots.md: 2
+      concepts/storage/volume-snapshot-classes.md: 1
+
+  # -- workloads and rollout --------------------------------------------
+  - id: Q-049
+    query: roll out a new version gradually and undo it if it goes wrong
+    facet: rollout
+    relevant:
+      tasks/run-application/update-deployment-rolling.md: 2
+      concepts/workloads/controllers/deployment.md: 2
+
+  - id: Q-050
+    query: one pod per node for a log shipper
+    facet: workloads
+    relevant:
+      concepts/workloads/controllers/daemonset.md: 2
+      tasks/manage-daemon/create-daemon-set.md: 2
+
+  - id: Q-051
+    query: workload that needs stable names and its own disk each
+    facet: workloads
+    relevant:
+      concepts/workloads/controllers/statefulset.md: 2
+      tasks/run-application/run-replicated-stateful-application.md: 1
+
+  - id: Q-052
+    query: stateful pod is stuck terminating and will not go away
+    facet: workloads
+    relevant:
+      tasks/run-application/force-delete-stateful-set-pod.md: 2
+      tasks/debug/debug-application/debug-statefulset.md: 2
+
+  - id: Q-053
+    query: run something on a schedule every night
+    facet: workloads
+    relevant:
+      concepts/workloads/controllers/cron-jobs.md: 2
+      tasks/job/automated-tasks-with-cron-jobs.md: 2
+
+  - id: Q-054
+    query: batch work keeps retrying forever when it hits a bad record
+    facet: workloads
+    relevant:
+      tasks/job/pod-failure-policy.md: 2
+      concepts/workloads/controllers/job.md: 2
+
+  - id: Q-055
+    query: clean up finished runs automatically so they stop piling up
+    facet: workloads
+    relevant:
+      concepts/workloads/controllers/ttlafterfinished.md: 2
+
+  # -- config, secrets and security -------------------------------------
+  - id: Q-056
+    query: change a setting without rebuilding the image
+    facet: config
+    relevant:
+      tasks/configure-pod-container/configure-pod-configmap.md: 2
+      concepts/configuration/configmap.md: 2
+
+  - id: Q-057
+    query: get a database password into the app without baking it in
+    facet: secrets
+    relevant:
+      tasks/inject-data-application/distribute-credentials-secure.md: 2
+      concepts/configuration/secret.md: 2
+
+  - id: Q-058
+    query: secrets are sitting in plain text in the datastore
+    facet: secrets
+    relevant:
+      tasks/administer-cluster/encrypt-data.md: 2
+      concepts/security/secrets-good-practices.md: 1
+
+  - id: Q-059
+    query: pulling from our private registry fails with unauthorized
+    facet: images
+    relevant:
+      tasks/configure-pod-container/pull-image-private-registry.md: 2
+      concepts/containers/images.md: 1
+
+  - id: Q-060
+    query: container should not run as root
+    facet: security
+    relevant:
+      tasks/configure-pod-container/security-context.md: 2
+      concepts/security/pod-security-standards.md: 1
+
+  - id: Q-061
+    query: block privileged workloads across a whole namespace
+    facet: security
+    relevant:
+      tasks/configure-pod-container/enforce-standards-namespace-labels.md: 2
+      concepts/security/pod-security-admission.md: 2
+      concepts/security/pod-security-standards.md: 1
+
+  - id: Q-062
+    query: give a service the smallest set of permissions it needs
+    facet: rbac
+    relevant:
+      concepts/security/rbac-good-practices.md: 2
+      tasks/configure-pod-container/configure-service-account.md: 1
+
+  # -- cluster operations -----------------------------------------------
+  - id: Q-063
+    query: internal certificate expired and components stopped talking
+    facet: certificates
+    relevant:
+      tasks/tls/certificate-rotation.md: 2
+      tasks/administer-cluster/kubeadm/kubeadm-certs.md: 2
+      tasks/tls/managing-tls-in-a-cluster.md: 1
+
+  - id: Q-064
+    query: how do I find out how much cpu and memory pods are actually using
+    facet: observability
+    relevant:
+      tasks/debug/debug-cluster/resource-usage-monitoring.md: 2
+      tasks/debug/debug-cluster/resource-metrics-pipeline.md: 2
+
+  - id: Q-065
+    query: where do container logs end up and what rotates them
+    facet: observability
+    relevant:
+      concepts/cluster-administration/logging.md: 2
+
+  - id: Q-066
+    query: node shows NotReady and I need to work out what happened on it
+    facet: node-ops
+    relevant:
+      tasks/debug/debug-cluster/monitor-node-health.md: 2
+      concepts/architecture/nodes.md: 2
+      tasks/debug/debug-cluster/kubectl-node-debug.md: 1
+
+  - id: Q-067
+    query: keep a record of who changed what in the cluster
+    facet: security
+    relevant:
+      tasks/debug/debug-cluster/audit.md: 2
+
+  - id: Q-068
+    query: apiserver is rejecting requests because of too much load
+    facet: cluster-ops
+    relevant:
+      concepts/cluster-administration/flow-control.md: 2
+
+  - id: Q-069
+    query: upgrade the cluster without dropping traffic
+    facet: cluster-ops
+    relevant:
+      tasks/administer-cluster/cluster-upgrade.md: 2
+      tasks/administer-cluster/kubeadm/kubeadm-upgrade.md: 2
+      tasks/administer-cluster/safely-drain-node.md: 1
+
+  - id: Q-070
+    query: machine shut down and its pods did not move cleanly
+    facet: node-ops
+    relevant:
+      concepts/cluster-administration/node-shutdown.md: 2
+      concepts/architecture/nodes.md: 1
