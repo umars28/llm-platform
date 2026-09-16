@@ -91,13 +91,17 @@ async def _eval(args: argparse.Namespace) -> int:
         nonlocal done
         done += 1
         mark = f"{GREEN}ok  {RESET}" if score.correct else f"{RED}miss{RESET}"
+        # flush=True because Python buffers stdout when it is not a terminal,
+        # and a serial sweep redirected to a file otherwise shows nothing at all
+        # for over an hour -- indistinguishable from being hung.
         print(f"  [{done:>2}/{total}] {mark} {score.scenario_id}  "
               f"cause={score.matched_groups}/{score.total_groups} "
               f"action={score.proposed_action} "
-              f"{DIM}{score.read_tool_calls} calls, {score.elapsed_s:.0f}s{RESET}")
+              f"{DIM}{score.read_tool_calls} calls, {score.elapsed_s:.0f}s{RESET}",
+              flush=True)
 
     print(f"{BOLD}running {total} scenarios{RESET} "
-          f"(concurrency {args.concurrency}, effort {args.effort})\n")
+          f"(concurrency {args.concurrency}, effort {args.effort})\n", flush=True)
     try:
         payload = await run_harness(
             args.scenarios or None,
