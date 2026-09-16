@@ -31,3 +31,4 @@ packages = ["src/runbook_rag"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: needs the embedding or reranking model loaded"]
