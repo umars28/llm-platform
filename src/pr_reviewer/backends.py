@@ -108,6 +108,12 @@ class OllamaClient:
                 ([{"role": "system", "content": system}] if system else [])
                 + [{"role": "user", "content": prompt}]
             ),
+            # Reasoning models emit a thinking block that consumes the same
+            # output budget as the answer. On a large diff qwen3 spent all of it
+            # thinking and returned an empty string, which looked like a parse
+            # failure rather than a truncation. Servers that do not know the
+            # field ignore it.
+            "think": False,
             "options": {
                 # As close to deterministic as the runtime allows; a review that
                 # changes between identical runs is not a measurement.

@@ -107,7 +107,7 @@ def _parse(text: str) -> list[Finding]:
     ]
 
 
-def review(client: Any, sample: Sample, model: str, max_tokens: int = 2048) -> Review:
+def review(client: Any, sample: Sample, model: str, max_tokens: int = 8192) -> Review:
     try:
         response = client.messages.create(
             model=model,
@@ -127,7 +127,13 @@ def review(client: Any, sample: Sample, model: str, max_tokens: int = 2048) -> R
     except Exception as exc:
         return Review(sample_id=sample.id, model=model, error=f"{type(exc).__name__}: {exc}")
 
-    text = next(b.text for b in response.content if b.type == "text")
+    text = next((b.text for b in response.content if b.type == "text"), "")
+    if not text.strip():
+        return Review(
+            sample_id=sample.id, model=model,
+            error="empty response: the model produced no output, usually a token "
+                  "budget consumed by a thinking block before the answer began",
+        )
     try:
         findings = _parse(text)
     except ValueError as exc:
@@ -143,6 +149,10 @@ def review(client: Any, sample: Sample, model: str, max_tokens: int = 2048) -> R
 # -- scoring ------------------------------------------------------------
 
 MATCH_THRESHOLD = 0.5
+
+# Below this share of reviews completing, the rates describe whichever samples
+# happened to survive, and are not reported as quality.
+MIN_COMPLETION = 0.9
 
 
 def finding_matches(finding: Finding, keywords: Sequence[str]) -> float:
@@ -214,8 +224,27 @@ class Score:
     def errors(self) -> int:
         return sum(1 for r, _ in self.reviews if r.error)
 
+    @property
+    def completion_rate(self) -> float:
+        rows = self.reviews
+        if not rows:
+            return 0.0
+        return sum(1 for r, _ in rows if not r.error) / len(rows)
+
+    @property
+    def valid(self) -> bool:
+        """Whether the rates describe the corpus rather than the survivors.
+
+        The same check the other projects in this family grew after reporting
+        confident percentages for runs that mostly errored. It belongs here too,
+        and its absence let a run with 26 failures report "0% recall".
+        """
+        return self.completion_rate >= MIN_COMPLETION
+
     def summary(self) -> dict[str, float]:
         return {
+            "valid": self.valid,
+            "completion_rate": round(self.completion_rate, 4),
             "defective": len(self.defective),
             "clean": len(self.clean),
             "recall": round(self.recall, 4),

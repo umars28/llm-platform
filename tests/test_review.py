@@ -203,3 +203,28 @@ def test_the_diff_and_path_reach_the_model():
     review(client, sample(), model="m")
     sent = client.kwargs["messages"][0]["content"]
     assert "src/x.py" in sent and "+code" in sent
+
+
+def test_an_empty_model_response_is_a_recorded_error_not_an_empty_review():
+    """A thinking block can eat the whole token budget; that is not 'no defects'."""
+    result = review(FakeClient("   "), sample(), model="m")
+    assert result.error and "empty response" in result.error
+    assert not result.reported_a_defect
+
+
+def test_a_mostly_errored_run_is_not_a_measurement():
+    """26 of 55 failing once reported '0% recall' as though it meant something."""
+    score = Score()
+    for _ in range(3):
+        score.add(hit(), sample())
+    for _ in range(7):
+        score.add(Review("s", [], error="boom"), sample())
+    assert not score.valid
+    assert score.summary()["valid"] is False
+
+
+def test_a_clean_run_is_valid():
+    score = Score()
+    for _ in range(10):
+        score.add(hit(), sample())
+    assert score.valid

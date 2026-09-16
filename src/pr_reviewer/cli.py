@@ -65,6 +65,12 @@ def cmd_evaluate(args) -> int:
 
     summary = score.summary()
     elapsed = time.time() - started
+    if not summary["valid"]:
+        print(f"\n{RED}NOT A RESULT{RESET}  only "
+              f"{summary['completion_rate']:.0%} of reviews completed "
+              f"({summary['errors']} errors).")
+        print("The rates below describe whichever samples survived. "
+              "Do not quote them.")
     print(f"\n{BOLD}summary{RESET}  {DIM}{elapsed/len(samples):.0f}s per diff{RESET}")
     print(f"  recall (named the real defect)   {summary['recall']:.0%}")
     print(f"  detection (flagged something)    {summary['detection_rate']:.0%}")
