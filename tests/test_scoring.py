@@ -284,3 +284,33 @@ def test_a_mostly_errored_sweep_is_not_a_result():
     assert "These are not results" in rendered
     assert "5/30" in rendered
     assert "Do not quote them" in rendered
+
+
+def test_completed_scenarios_survive_an_interrupted_sweep(tmp_path):
+    """A serial sweep runs over an hour; losing all of it to a sleeping laptop
+    is a design fault, not bad luck."""
+    from ops_copilot.harness import _append_partial, load_partial
+    from ops_copilot.scoring import Score
+
+    score = Score(scenario_id="SC-001", category="resource-exhaustion")
+    _append_partial(tmp_path, score, {"scenario_id": "SC-001", "cost_usd": 0.5})
+
+    recovered = load_partial(tmp_path)
+    assert set(recovered) == {"SC-001"}
+    assert recovered["SC-001"]["trace"]["cost_usd"] == 0.5
+
+
+def test_resuming_an_untouched_directory_finds_nothing(tmp_path):
+    from ops_copilot.harness import load_partial
+
+    assert load_partial(tmp_path) == {}
+
+
+def test_a_rerun_of_the_same_scenario_keeps_the_latest(tmp_path):
+    from ops_copilot.harness import _append_partial, load_partial
+    from ops_copilot.scoring import Score
+
+    for cost in (0.1, 0.9):
+        _append_partial(tmp_path, Score(scenario_id="SC-001", category="c"),
+                        {"scenario_id": "SC-001", "cost_usd": cost})
+    assert load_partial(tmp_path)["SC-001"]["trace"]["cost_usd"] == 0.9

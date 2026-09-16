@@ -53,9 +53,36 @@ async def _run_one(
             audit_dir=str(run_dir / "audit" / scenario.id),
         )
     score = score_run(run, scenario)
+    trace = run.to_dict()
+    _append_partial(run_dir, score, trace)
     if progress:
         progress(score)
-    return score, run.to_dict()
+    return score, trace
+
+
+def _append_partial(run_dir: Path, score: Score, trace: dict[str, Any]) -> None:
+    """Write each scenario as it finishes.
+
+    A serial sweep takes over an hour, and writing only at the end means a
+    laptop sleeping, a process killed or a machine rebooting loses every
+    completed scenario. Appending costs nothing and makes the run resumable.
+    """
+    run_dir.mkdir(parents=True, exist_ok=True)
+    with (run_dir / "partial.jsonl").open("a") as fh:
+        fh.write(json.dumps({"score": score.to_dict(), "trace": trace}) + "\n")
+
+
+def load_partial(run_dir: Path) -> dict[str, dict[str, Any]]:
+    """Scenarios already completed in an interrupted run, by id."""
+    path = Path(run_dir) / "partial.jsonl"
+    if not path.exists():
+        return {}
+    done: dict[str, dict[str, Any]] = {}
+    for line in path.read_text().splitlines():
+        if line.strip():
+            row = json.loads(line)
+            done[row["score"]["scenario_id"]] = row
+    return done
 
 
 async def run_harness(
@@ -66,6 +93,7 @@ async def run_harness(
     model: str = MODEL,
     label: str | None = None,
     progress: Callable[[Score], None] | None = None,
+    resume_from: str | Path | None = None,
 ) -> dict[str, Any]:
     scenarios = (
         [load_scenario(ref) for ref in scenario_refs]
@@ -82,17 +110,30 @@ async def run_harness(
             "Get a key at https://console.anthropic.com/settings/keys"
         )
 
-    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_dir = RUNS_DIR / (f"{stamp}-{label}" if label else stamp)
+    if resume_from:
+        run_dir = Path(resume_from)
+        if not run_dir.exists():
+            raise HarnessAborted(f"nothing to resume at {run_dir}")
+    else:
+        stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        run_dir = RUNS_DIR / (f"{stamp}-{label}" if label else stamp)
     run_dir.mkdir(parents=True, exist_ok=True)
+
+    already = load_partial(run_dir)
+    if already:
+        scenarios = [s for s in scenarios if s.id not in already]
 
     semaphore = asyncio.Semaphore(concurrency)
 
     # Canary: prove one scenario can reach the API before committing to the
     # other twenty-nine. An auth or model-id mistake fails the same way every
     # time, and discovering it once is enough.
-    first = await _run_one(scenarios[0], semaphore, run_dir, effort, model, progress)
-    if first[1].get("error_kind") in {"auth", "config", "billing"}:
+    if not scenarios:  # everything was already done in a previous attempt
+        results = []
+        first = None
+    else:
+        first = await _run_one(scenarios[0], semaphore, run_dir, effort, model, progress)
+    if first and first[1].get("error_kind") in {"auth", "config", "billing"}:
         raise HarnessAborted(
             f"{scenarios[0].id} failed before reaching any tool, and the cause "
             f"is not scenario-specific, so the sweep stopped after one instead "
@@ -106,7 +147,15 @@ async def run_harness(
             for s in scenarios[1:]
         )
     )
-    results = [first, *rest]
+    results = [first, *rest] if first else []
+
+    # Completed scenarios from an interrupted run count towards this one.
+    recovered = [
+        (Score(**{k: v for k, v in row["score"].items() if k in Score.__dataclass_fields__}),
+         row["trace"])
+        for row in already.values()
+    ]
+    results = [*recovered, *results]
 
     scores = [score for score, _ in results]
     summary = summarise(scores)

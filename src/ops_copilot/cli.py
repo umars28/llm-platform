@@ -109,6 +109,7 @@ async def _eval(args: argparse.Namespace) -> int:
             effort=args.effort,
             label=args.label,
             progress=progress,
+            resume_from=args.resume,
         )
     except HarnessAborted as exc:
         print(f"\n{RED}sweep aborted{RESET}\n\n{exc}")
@@ -193,6 +194,8 @@ def main() -> int:
     p_eval.add_argument("--effort", default="high",
                         choices=["low", "medium", "high", "xhigh", "max"])
     p_eval.add_argument("--label", help="suffix for the run directory")
+    p_eval.add_argument("--resume", metavar="RUN_DIR",
+                        help="continue an interrupted run, skipping what it finished")
     p_eval.set_defaults(func=lambda a: asyncio.run(_eval(a)))
 
     p_appr = sub.add_parser("approvals", help="show change requests")
