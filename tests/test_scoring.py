@@ -155,3 +155,32 @@ def test_an_all_errored_run_is_marked_invalid():
     rendered = render_markdown(payload)
     assert "These are not results" in rendered
     assert "Do not quote them" in rendered
+
+
+def test_native_params_follow_the_model_not_the_gateway():
+    """Adaptive thinking and effort are Anthropic-only; a gateway may route elsewhere."""
+    from ops_copilot.agent import _supports_native_params
+
+    assert _supports_native_params("claude-opus-5")
+    assert _supports_native_params("anthropic/claude-opus-5")  # OpenRouter namespacing
+    assert not _supports_native_params("z-ai/glm-4.6")
+    assert not _supports_native_params("openai/gpt-4o")
+
+
+def test_native_params_can_be_forced_either_way(monkeypatch):
+    from ops_copilot.agent import _supports_native_params
+
+    monkeypatch.setenv("OPS_COPILOT_NATIVE_PARAMS", "0")
+    assert not _supports_native_params("claude-opus-5")
+    monkeypatch.setenv("OPS_COPILOT_NATIVE_PARAMS", "1")
+    assert _supports_native_params("z-ai/glm-4.6")
+
+
+def test_a_gateway_base_url_satisfies_the_preflight(monkeypatch):
+    """A proxy may authenticate on the caller's behalf, so do not block it."""
+    from ops_copilot.agent import credentials_available
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://openrouter.ai/api")
+    assert credentials_available()

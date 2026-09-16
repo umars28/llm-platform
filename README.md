@@ -141,10 +141,21 @@ brew install anthropics/tap/ant
 ant auth login
 ant auth status          # shows which source won
 
-# Or a gateway that speaks the Anthropic Messages API
-export ANTHROPIC_BASE_URL=https://your-gateway.example/v1
-export ANTHROPIC_AUTH_TOKEN=...          # if the gateway wants one
+# Or a gateway that speaks the Anthropic Messages API, e.g. OpenRouter
+unset ANTHROPIC_API_KEY
+export ANTHROPIC_BASE_URL=https://openrouter.ai/api
+export ANTHROPIC_AUTH_TOKEN=sk-or-v1-...
+export OPS_COPILOT_MODEL=anthropic/claude-opus-5
 ```
+
+`unset` the API key rather than blanking it — an empty `ANTHROPIC_API_KEY=""`
+still occupies its precedence slot, and the SDK then sends both credentials and
+the request is rejected.
+
+`OPS_COPILOT_MODEL` exists because gateways namespace their model ids. Adaptive
+thinking and `effort` are Anthropic-specific, so they are sent only when the
+model id resolves to a Claude model; `OPS_COPILOT_NATIVE_PARAMS=0` or `1` forces
+the decision if the inference is wrong for your gateway.
 
 A set `ANTHROPIC_API_KEY` silently shadows an OAuth profile, including an empty
 one — `unset` it rather than blanking it if you mean to use the profile.

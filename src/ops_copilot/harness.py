@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from .agent import credentials_available, diagnose
+from .agent import MODEL, credentials_available, diagnose
 from .scoring import Score, score_run, summarise
 from .world import Scenario, all_scenarios, load_scenario
 
@@ -58,7 +58,7 @@ async def run_harness(
     *,
     concurrency: int = 4,
     effort: str = "high",
-    model: str = "claude-opus-5",
+    model: str = MODEL,
     label: str | None = None,
     progress: Callable[[Score], None] | None = None,
 ) -> dict[str, Any]:

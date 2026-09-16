@@ -27,7 +27,25 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from .world import Scenario, load_scenario
 
-MODEL = "claude-opus-5"
+# Overridable so the project can run through an Anthropic-protocol gateway.
+# OpenRouter namespaces its ids ("anthropic/claude-opus-5"); the direct API does
+# not. Both reach the same model.
+MODEL = os.environ.get("OPS_COPILOT_MODEL", "claude-opus-5")
+
+
+def _supports_native_params(model: str) -> bool:
+    """Whether to send adaptive thinking and effort.
+
+    Both are Anthropic-specific. A gateway routing to a non-Anthropic model
+    either ignores them or rejects the request, so they are sent only when the
+    model id actually resolves to a Claude model. OPS_COPILOT_NATIVE_PARAMS
+    forces the decision either way.
+    """
+    override = os.environ.get("OPS_COPILOT_NATIVE_PARAMS")
+    if override is not None:
+        return override.lower() not in {"0", "false", "no"}
+    name = model.lower()
+    return name.startswith("claude-") or name.startswith("anthropic/")
 
 # Anything matching these means every scenario will fail the same way, so the
 # harness should stop rather than produce thirty identical failures.
@@ -232,16 +250,20 @@ async def diagnose(
                 listed = await mcp_client.list_tools()
                 emit("tools", [t.name for t in listed.tools])
 
-                runner = client.beta.messages.tool_runner(
-                    model=model,
-                    max_tokens=16000,
-                    max_iterations=max_iterations,
-                    system=SYSTEM_PROMPT,
-                    thinking={"type": "adaptive"},
-                    output_config={"effort": effort},
-                    tools=[async_mcp_tool(t, mcp_client) for t in listed.tools],
-                    messages=[{"role": "user", "content": _alert_prompt(scenario)}],
-                )
+                params: dict[str, Any] = {
+                    "model": model,
+                    "max_tokens": 16000,
+                    "max_iterations": max_iterations,
+                    "system": SYSTEM_PROMPT,
+                    "tools": [async_mcp_tool(t, mcp_client) for t in listed.tools],
+                    "messages": [
+                        {"role": "user", "content": _alert_prompt(scenario)}
+                    ],
+                }
+                if _supports_native_params(model):
+                    params["thinking"] = {"type": "adaptive"}
+                    params["output_config"] = {"effort": effort}
+                runner = client.beta.messages.tool_runner(**params)
 
                 async for message in runner:
                     run.turns += 1
