@@ -24,6 +24,9 @@ from .ingest import Document
 # the approximation costs nothing to compute.
 _WORD = re.compile(r"\S+")
 _HEADING = re.compile(r"^(#{1,4})\s+(.*)$", re.M)
+# Hugo heading anchors: "## Pod phase {#pod-phase}". The anchor is markup, and
+# it ends up inside the embedded text if it is not removed here.
+_ANCHOR = re.compile(r"\s*\{#[^}]*\}\s*$")
 _FENCE = re.compile(r"^```", re.M)
 
 
@@ -143,7 +146,7 @@ def _sections(content: str) -> list[tuple[str | None, str]]:
             in_fence = not in_fence
         match = _HEADING.match(line) if not in_fence else None
         if match:
-            sections.append((match.group(2).strip(), []))
+            sections.append((_ANCHOR.sub("", match.group(2)).strip(), []))
         else:
             sections[-1][1].append(line)
 

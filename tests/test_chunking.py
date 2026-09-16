@@ -81,3 +81,11 @@ def test_unknown_strategy_is_rejected_by_name():
 def test_token_counting_is_whitespace_based():
     assert count_tokens("one two  three\nfour") == 4
     assert count_tokens("") == 0
+
+
+def test_hugo_heading_anchors_are_stripped_from_sections():
+    """The anchor is markup; left in, it lands inside the embedded text."""
+    content = "## Pod phase {#pod-phase}\n\n" + "detail " * 120
+    chunk = header_chunks(doc(content))[0]
+    assert chunk.section == "Pod phase"
+    assert "{#" not in chunk.content
