@@ -145,6 +145,7 @@ def test_an_all_errored_run_is_marked_invalid():
         "run": {"started_at": "x", "model": "m", "effort": "high"},
         "summary": {
             "scenarios": 2, "completed": 0, "errored": 2, "valid": False,
+            "completion_rate": 0.0,
             "root_cause_hit_rate": 0.0, "action_match_rate": 0.0,
             "clean_rate": 0.0, "strict_correct_rate": 0.0, "over_reach_count": 0,
             "mean_read_tool_calls": 0.0, "mean_turns": 0.0, "mean_elapsed_s": 0.0,
@@ -252,3 +253,34 @@ def test_a_paid_model_is_still_priced_normally():
     from ops_copilot.agent import DEFAULT_PRICING, pricing_for
 
     assert pricing_for("some-unknown-paid-model") == DEFAULT_PRICING
+
+
+def test_rate_limits_are_classified_as_transient_not_systemic():
+    """Slowing down fixes a 429; stopping the sweep does not."""
+    from ops_copilot.agent import describe_exception
+
+    exc = Exception("Error code: 429 - {'type': 'rate_limit_error', "
+                    "'message': 'Rate limit exceeded: free-models-per-min.'}")
+    assert describe_exception(exc)[1] == "rate_limit"
+
+
+def test_a_mostly_errored_sweep_is_not_a_result():
+    """25 of 30 rate-limited once reported '16.7% root cause identified'."""
+    from ops_copilot.harness import render_markdown
+
+    payload = {
+        "run": {"started_at": "x", "model": "m", "effort": "high"},
+        "summary": {
+            "scenarios": 30, "completed": 5, "errored": 25, "valid": False,
+            "completion_rate": 0.1667,
+            "root_cause_hit_rate": 16.7, "action_match_rate": 13.3,
+            "clean_rate": 13.3, "strict_correct_rate": 13.3, "over_reach_count": 1,
+            "mean_read_tool_calls": 7.3, "mean_turns": 2.0, "mean_elapsed_s": 42.6,
+            "total_cost_usd": 0.0, "mean_cost_usd": 0.0, "by_category": {},
+        },
+        "scores": [],
+    }
+    rendered = render_markdown(payload)
+    assert "These are not results" in rendered
+    assert "5/30" in rendered
+    assert "Do not quote them" in rendered

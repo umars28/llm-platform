@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -22,6 +23,10 @@ from .world import Scenario, all_scenarios, load_scenario
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNS_DIR = REPO_ROOT / "runs"
+
+# Below this share of scenarios completing, the rates describe the survivors
+# rather than the suite, and are not reported as accuracy.
+MIN_COMPLETION = float(os.environ.get("OPS_COPILOT_MIN_COMPLETION", "0.9"))
 
 
 class HarnessAborted(RuntimeError):
@@ -106,8 +111,16 @@ async def run_harness(
     scores = [score for score, _ in results]
     summary = summarise(scores)
 
-    # A run where nothing completed has no accuracy to report, only a fault.
-    summary["valid"] = summary["completed"] > 0
+    # Validity is a completion rate, not a list of error kinds.
+    #
+    # The previous rule was "at least one scenario completed", which passed a
+    # run where 25 of 30 hit a rate limit and duly reported "16.7% root cause
+    # identified" -- a number about the five that ran, presented as a number
+    # about thirty. Enumerating which errors are disqualifying only ever covers
+    # the failures already seen; a completion floor covers the next one too.
+    completion = summary["completed"] / summary["scenarios"] if summary["scenarios"] else 0.0
+    summary["completion_rate"] = round(completion, 4)
+    summary["valid"] = completion >= MIN_COMPLETION
     payload = {
         "run": {
             "started_at": stamp,
@@ -136,9 +149,10 @@ def render_markdown(payload: dict[str, Any]) -> str:
     ]
     if not summary.get("valid", True):
         lines += [
-            "> **These are not results.** Every scenario errored before "
-            "reaching a diagnosis, so the rates below are all zero because "
-            "nothing ran, not because the agent was wrong. Do not quote them.",
+            f"> **These are not results.** Only "
+            f"{summary['completed']}/{summary['scenarios']} scenarios completed "
+            f"({summary['completion_rate']:.0%}); the rates below describe the "
+            "survivors, not the suite. Do not quote them.",
             "",
         ]
     lines += [

@@ -62,6 +62,8 @@ _AUTH_MARKERS = (
     "permission_error",
 )
 _CONFIG_MARKERS = ("not_found_error", "model:", "invalid_request_error")
+# Transient, unlike the two above -- the fix is to slow down, not to stop.
+_RATE_MARKERS = ("rate_limit", "429", "too many requests")
 # Running out of credit fails every scenario identically, exactly like bad
 # credentials. Found the hard way: a 402 slipped past the canary as "other".
 _BILLING_MARKERS = (
@@ -108,6 +110,8 @@ def describe_exception(exc: BaseException) -> tuple[str, str]:
         return message, "auth"
     if any(marker in lowered for marker in _BILLING_MARKERS):
         return message, "billing"
+    if any(marker in lowered for marker in _RATE_MARKERS):
+        return message, "rate_limit"
     if any(marker in lowered for marker in _CONFIG_MARKERS):
         return message, "config"
     return message, "other"
@@ -295,7 +299,7 @@ async def diagnose(
     run = AgentRun(
         scenario_id=scenario.id, scenario_title=scenario.title, model=model
     )
-    client = AsyncAnthropic()
+    client = AsyncAnthropic(max_retries=int(os.environ.get("OPS_COPILOT_MAX_RETRIES", "8")))
 
     def emit(kind: str, payload: Any) -> None:
         if on_event:

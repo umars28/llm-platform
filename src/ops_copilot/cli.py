@@ -111,6 +111,19 @@ async def _eval(args: argparse.Namespace) -> int:
         return 2
 
     s = payload["summary"]
+    if not s.get("valid", True):
+        print(f"\n{RED}NOT A RESULT{RESET}  only {s['completed']}/{s['scenarios']} "
+              f"scenarios completed ({s['completion_rate']:.0%}).")
+        print("The rates below describe the survivors, not the suite. "
+              "Do not quote them.")
+        errored = [x for x in payload["scores"] if x["error"]]
+        kinds = {}
+        for x in payload["traces"]:
+            if x.get("error"):
+                kinds[x.get("error_kind") or "?"] = kinds.get(x.get("error_kind") or "?", 0) + 1
+        print(f"{DIM}failure kinds: {kinds}{RESET}")
+        if "rate_limit" in kinds:
+            print(f"{YELLOW}Rate limited. Retry with --concurrency 1.{RESET}")
     print(f"\n{BOLD}summary{RESET}")
     print(f"  root cause identified   {s['root_cause_hit_rate']}%")
     print(f"  action matched          {s['action_match_rate']}%")
