@@ -26,11 +26,18 @@ def chunk(n: int, doc: str = "doc1") -> Chunk:
 
 @pytest.fixture(scope="module")
 def store() -> PgVectorStore:
+    """Skip only when Postgres itself is unreachable.
+
+    A missing table is not a reason to skip -- the fixture creates it. Treating
+    the two the same turned real failures into silent passes.
+    """
+    s = PgVectorStore(table="chunks_pytest")
     try:
-        s = PgVectorStore()
-        s.count()
-    except Exception as exc:  # no database available
-        pytest.skip(f"postgres unavailable: {exc}")
+        s.reset(STRATEGY, dim=DIM)
+    except Exception as exc:
+        if "could not connect" in str(exc) or "does not exist" in str(exc).lower():
+            pytest.skip(f"postgres unavailable: {exc}")
+        raise
     return s
 
 
@@ -97,3 +104,16 @@ def test_unique_documents_preserves_rank_order():
         Hit("c3", "docB", "B", None, "", "", 0.7),
     ]
     assert unique_documents(hits) == ["docB", "docA"]
+
+
+def test_changing_embedding_dimension_rebuilds_the_table(store: PgVectorStore):
+    """CREATE TABLE IF NOT EXISTS ignores a new dimension; reset must not."""
+    load(store, [chunk(0)], np.zeros((1, DIM), dtype=np.float32), STRATEGY)
+    wider = np.zeros((1, DIM * 2), dtype=np.float32)
+    load(store, [chunk(0)], wider, STRATEGY)  # would raise without the rebuild
+    assert store.count(STRATEGY) == 1
+
+
+def test_unsafe_table_names_are_rejected():
+    with pytest.raises(ValueError, match="unsafe table name"):
+        PgVectorStore(table="chunks; DROP TABLE users")
