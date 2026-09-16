@@ -15,6 +15,13 @@ The negatives are built by damaging a known-good answer in a specific, named way
 -- removing the causal link, stripping the evidence, swapping in a plausible but
 wrong cause. That is deliberate: a judge that fails only on gibberish has told
 you nothing about the failures you will actually see.
+
+**Each damage declares which criterion it actually breaks.** The first version
+applied every damage to every criterion and scored a judge 1/4 for verdicts that
+were mostly correct: asked "does this state a causal chain", a confidently wrong
+answer genuinely does state one, and an answer stripped of numbers still states
+one too. The judge was right and the probe set was wrong. A probe whose expected
+answer does not follow from the criterion measures the person who wrote it.
 """
 
 from __future__ import annotations
@@ -63,19 +70,49 @@ def swap_in_wrong_cause(text: str) -> str:
     )
 
 
-DAMAGES: dict[str, Callable[[str], str]] = {
-    "no_causal_link": strip_causal_link,
-    "no_evidence": strip_evidence,
-    "wrong_cause": swap_in_wrong_cause,
-}
+@dataclass(frozen=True)
+class Damage:
+    """A way to break an answer, and what it actually breaks.
+
+    `breaks` names the criteria this damage is a valid negative for. Applying a
+    damage to a criterion it does not break produces a probe whose expected
+    answer is simply wrong.
+    """
+
+    name: str
+    apply: Callable[[str], str]
+    breaks: frozenset[str]
 
 
-def build_probes(good_subject: str, case_id: str = "probe") -> list[Probe]:
-    """One positive and one negative per damage, from a known-good answer."""
+DAMAGES: tuple[Damage, ...] = (
+    Damage("no_causal_link", strip_causal_link,
+           frozenset({"joins_cause_to_symptom", "identifies_the_metastable_state",
+                      "explains_the_alert_lag", "explains_the_relay_throughput_drop",
+                      "separates_volume_from_slowness",
+                      "distinguishes_leak_from_undersizing"})),
+    Damage("no_evidence", strip_evidence, frozenset({"evidence_is_named"})),
+    Damage("wrong_cause", swap_in_wrong_cause,
+           frozenset({"evidence_is_named", "identifies_the_metastable_state",
+                      "explains_the_alert_lag", "explains_the_relay_throughput_drop",
+                      "separates_volume_from_slowness",
+                      "distinguishes_leak_from_undersizing"})),
+)
+
+
+def build_probes(
+    good_subject: str, criterion_name: str, case_id: str = "probe"
+) -> list[Probe]:
+    """One positive, plus a negative for every damage that breaks this criterion.
+
+    A criterion with no applicable damage gets only the positive, and that is
+    reported honestly rather than padded -- a single-probe result says the judge
+    was barely tested, which is information.
+    """
     probes = [Probe(f"{case_id}:good", good_subject, should_pass=True)]
     probes += [
-        Probe(f"{case_id}:{name}", damage(good_subject), should_pass=False, damage=name)
-        for name, damage in DAMAGES.items()
+        Probe(f"{case_id}:{d.name}", d.apply(good_subject), should_pass=False, damage=d.name)
+        for d in DAMAGES
+        if criterion_name in d.breaks
     ]
     return probes
 

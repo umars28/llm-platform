@@ -110,6 +110,50 @@ without paying for the whole run again.
 `pytest` runs 83 tests, none of which need an API key —
 `tests/test_gate.py` is the one worth reading first.
 
+## Measuring the judge before trusting it
+
+A judge is a component, and an unmeasured component is a guess. `agreement.py`
+scores a judge against probes whose answers are known: a good answer, and the
+same answer damaged in a specific named way — the causal link removed, the
+evidence stripped, a fluent but wrong cause swapped in.
+
+Each damage declares which criteria it actually breaks. The first version applied
+every damage to every criterion and scored a correct judge 1/4, because asked
+"does this state a causal chain", a confidently wrong answer genuinely does state
+one. **The judge was right and the probe set was wrong.** A probe whose expected
+answer does not follow from its criterion measures whoever wrote it.
+
+Measured on a local `qwen3:8b`, with probes matched to criteria:
+
+| criterion | correct | consistent |
+| --- | --- | --- |
+| `evidence_is_named` | 3/3 | yes |
+| `joins_cause_to_symptom` | 1/2 | yes |
+
+Concrete criteria it handles; the subtle one it does not — it passes an answer
+whose causal connectives have been removed. So a local judge is usable for part
+of this suite and not for the rest, which is a more useful thing to know than an
+overall percentage. It is deterministic either way, which is the other property
+that matters.
+
+## Local judging
+
+`Judge` takes its client by injection, so a local backend is an adapter rather
+than a second implementation. Ollama speaks its own chat API, and `backends.py`
+maps the three fields the judge uses; temperature is pinned to zero, because a
+verdict that changes between identical runs is not a measurement.
+
+```bash
+brew install ollama && brew services start ollama
+ollama pull qwen3:8b
+llm-eval run --backend local
+```
+
+The judge version carries the model, so `qwen3:8b/v1` and `claude-opus-5/v1` are
+different judges to the gate. A baseline recorded by one **fails as stale**
+against the other rather than being silently compared — which is what stops a
+free local score being mistaken for a hosted one.
+
 ## Status
 
 The deterministic half runs against real ops-copilot traces today. Four cases

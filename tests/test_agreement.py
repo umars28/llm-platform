@@ -30,10 +30,28 @@ def test_stripping_evidence_leaves_an_unsupported_assertion():
     assert "connection" in damaged
 
 
-def test_probes_pair_one_positive_with_every_damage():
-    probes = build_probes(GOOD)
-    assert sum(p.should_pass for p in probes) == 1
-    assert {p.damage for p in probes if not p.should_pass} == set(DAMAGES)
+def test_a_damage_is_only_used_where_it_actually_breaks_the_criterion():
+    """Applying every damage to every criterion scored a correct judge 1/4."""
+    chain = build_probes(GOOD, "joins_cause_to_symptom")
+    evidence = build_probes(GOOD, "evidence_is_named")
+
+    assert "no_causal_link" in {p.damage for p in chain}
+    # A confidently wrong answer still states a causal chain, so it is not a
+    # negative for this criterion.
+    assert "wrong_cause" not in {p.damage for p in chain}
+    # Stripping numbers is what breaks an evidence criterion, not a chain one.
+    assert "no_evidence" in {p.damage for p in evidence}
+    assert "no_evidence" not in {p.damage for p in chain}
+
+
+def test_every_probe_set_has_exactly_one_positive():
+    for name in ("joins_cause_to_symptom", "evidence_is_named", "unknown_criterion"):
+        assert sum(p.should_pass for p in build_probes(GOOD, name)) == 1
+
+
+def test_an_untested_criterion_is_reported_rather_than_padded():
+    """One probe means the judge was barely tested, which is information."""
+    assert len(build_probes(GOOD, "criterion_no_damage_breaks")) == 1
 
 
 CRITERION = Criterion(name="joins_cause_to_symptom", question="Does it join cause to symptom?")
@@ -55,7 +73,7 @@ class ScriptedJudge:
 
 
 def test_a_perfect_judge_scores_full_marks():
-    probes = build_probes(GOOD)
+    probes = build_probes(GOOD, "joins_cause_to_symptom")
     expected = [p.should_pass for p in probes]
     # Each probe is asked twice for the consistency check.
     judge = ScriptedJudge([v for e in expected for v in (e, e)])
@@ -66,30 +84,32 @@ def test_a_perfect_judge_scores_full_marks():
 
 def test_a_judge_that_passes_everything_is_caught():
     """It would look flawless against a suite of only good outputs."""
-    probes = build_probes(GOOD)
+    probes = build_probes(GOOD, "joins_cause_to_symptom")
     report = evaluate_judge(ScriptedJudge([True]), CRITERION, probes)
-    assert report.accuracy < 0.5
-    assert len(report.mistakes) == len(DAMAGES)
+    negatives = [p for p in probes if not p.should_pass]
+    assert negatives, "this criterion must have at least one negative to be a real test"
+    assert len(report.mistakes) == len(negatives)
+    assert report.accuracy < 1.0
 
 
 def test_a_judge_that_fails_everything_is_caught():
-    probes = build_probes(GOOD)
+    probes = build_probes(GOOD, "joins_cause_to_symptom")
     report = evaluate_judge(ScriptedJudge([False]), CRITERION, probes)
     assert "should pass" in report.mistakes[0]
 
 
 def test_an_inconsistent_judge_is_flagged():
     """A verdict that changes between identical runs is not a measurement."""
-    report = evaluate_judge(ScriptedJudge([True, False]), CRITERION, build_probes(GOOD))
+    report = evaluate_judge(ScriptedJudge([True, False]), CRITERION, build_probes(GOOD, "joins_cause_to_symptom"))
     assert not report.consistent
 
 
 def test_the_report_names_the_judge_that_produced_it():
-    report = evaluate_judge(ScriptedJudge([True]), CRITERION, build_probes(GOOD))
+    report = evaluate_judge(ScriptedJudge([True]), CRITERION, build_probes(GOOD, "joins_cause_to_symptom"))
     assert report.judge_version == "fake/v1"
     assert "fake/v1" in report.explain()
 
 
 def test_the_mistake_list_names_the_damage_that_fooled_it():
-    report = evaluate_judge(ScriptedJudge([True]), CRITERION, build_probes(GOOD))
+    report = evaluate_judge(ScriptedJudge([True]), CRITERION, build_probes(GOOD, "joins_cause_to_symptom"))
     assert any("no_causal_link" in m for m in report.mistakes)
