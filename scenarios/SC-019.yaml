@@ -1,0 +1,107 @@
+id: SC-019
+title: Synchronised cache expiry stampedes the pricing service
+category: cascading-failure
+alert:
+  name: PricingServiceLatencySpikes
+  severity: P2
+  service: pricing-service
+  fired_at: "2026-09-17T21:00:00Z"
+  description: >-
+    pricing-service p99 latency spikes to 6s for roughly 90 seconds, then
+    recovers completely. It has happened at the top of every hour for 5 hours.
+world:
+  services:
+    - {name: pricing-service, tier: 1, owner: commerce, depends_on: [redis-cache, pricing-db]}
+    - {name: redis-cache, tier: 2, owner: platform-team, depends_on: []}
+    - {name: pricing-db, tier: 1, owner: platform-team, depends_on: []}
+  deploys:
+    - t: -330
+      service: pricing-service
+      version: v5.6.0
+      commit: cc10a48
+      author: nadia.k
+      summary: "Warm the full price cache on boot with a fixed 3600s TTL for every key"
+  logs:
+    pricing-service:
+      - {t: -61, level: INFO, msg: "GET /price 200 (elapsed=6ms, cache=hit)", count: 380000}
+      - {t: -60, level: WARN, msg: "cache miss storm: 41200 concurrent misses", count: 1}
+      - {t: -59, level: WARN, msg: "pricing-db query queue depth 3900", count: 600}
+      - {t: -58, level: INFO, msg: "GET /price 200 (elapsed=5980ms, cache=miss)", count: 41000}
+      - {t: -55, level: INFO, msg: "GET /price 200 (elapsed=6ms, cache=hit)", count: 210000}
+      - {t: 0, level: WARN, msg: "cache miss storm: 40800 concurrent misses", count: 1}
+  metrics:
+    pricing-service:
+      http_p99_latency_ms:
+        unit: ms
+        points: [{t: -120, v: 14}, {t: -61, v: 14}, {t: -60, v: 6100}, {t: -57, v: 22}, {t: -30, v: 14}, {t: 0, v: 6040}]
+      cache_hit_ratio:
+        unit: percent
+        points: [{t: -120, v: 99.1}, {t: -61, v: 99.2}, {t: -60, v: 2}, {t: -57, v: 96}, {t: 0, v: 2}]
+      requests_per_s:
+        unit: req/s
+        points: [{t: -120, v: 6400}, {t: -60, v: 6380}, {t: 0, v: 6410}]
+    redis-cache:
+      expired_keys_per_s:
+        unit: keys/s
+        points: [{t: -120, v: 30}, {t: -61, v: 28}, {t: -60, v: 41200}, {t: -57, v: 26}, {t: 0, v: 40800}]
+      evicted_keys_per_s:
+        unit: keys/s
+        points: [{t: -120, v: 0}, {t: 0, v: 0}]
+      used_memory:
+        unit: MiB
+        points: [{t: -120, v: 1840}, {t: 0, v: 1860}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 12}, {t: -60, v: 31}, {t: 0, v: 30}]
+    pricing-db:
+      queries_per_s:
+        unit: queries/s
+        points: [{t: -120, v: 180}, {t: -61, v: 178}, {t: -60, v: 24000}, {t: -57, v: 190}, {t: 0, v: 23600}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 19}, {t: -60, v: 97}, {t: -57, v: 22}, {t: 0, v: 96}]
+      mean_query_duration_ms:
+        unit: ms
+        points: [{t: -120, v: 2.1}, {t: 0, v: 2.4}]
+  k8s:
+    - kind: Deployment
+      name: pricing-service
+      namespace: prod
+      spec:
+        replicas: 10
+        image: "registry.internal/pricing-service:v5.6.0"
+        env: {CACHE_TTL_SECONDS: "3600", CACHE_WARM_ON_BOOT: "true", CACHE_TTL_JITTER: "0"}
+      status: {readyReplicas: 10, restarts_last_hour: 0}
+      events:
+        - {t: -330, type: Normal, reason: ScalingReplicaSet, msg: "Scaled up replica set pricing-service-4a19 to 10"}
+  runbooks:
+    - id: RB-047
+      title: "Cache stampede and TTL jitter"
+      tags: [cache, stampede, thundering-herd, ttl, jitter, redis, periodic]
+      body: >-
+        A symptom that recurs on a precise schedule and self-heals is periodic by
+        construction -- a cron, a TTL or a batch window. Keys written together
+        with an identical TTL expire together, so the entire cache falls off a
+        cliff at once and every request goes to the origin simultaneously. Fix by
+        adding random jitter to the TTL so expiry spreads out, and by
+        single-flighting concurrent misses for the same key. Scaling the origin
+        to absorb a 130x spike is not economical.
+ground_truth:
+  root_cause: >-
+    pricing-service v5.6.0 warms the entire price cache on boot and writes every
+    key with the same fixed 3600s TTL and zero jitter. All keys therefore expire
+    simultaneously one hour after boot and each hour after that: about 41000 keys
+    expire at once, cache hit ratio drops from 99% to 2%, and every concurrent
+    request falls through to pricing-db, which jumps from 180 to 24000 queries/s
+    and 97% CPU for about 90 seconds until the cache refills. Request volume is
+    flat throughout, so this is expiry synchronisation, not load.
+  must_include:
+    - ["cache", "ttl", "expiry", "expire"]
+    - ["same time", "simultaneously", "synchronis", "synchroniz", "stampede", "jitter", "at once", "all keys"]
+    - ["v5.6.0", "3600", "warm", "hourly", "every hour", "periodic"]
+  must_not_include:
+    - ["redis is evicting", "redis memory", "pricing-db is undersized", "traffic spike"]
+  expected_actions: [rollback_deploy, revert_config_change]
+  red_herrings:
+    - "pricing-db hits 97% CPU during each spike, which reads as an undersized database"
+    - "the incident self-heals every time, so it is easy to dismiss as transient"

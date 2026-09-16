@@ -1,0 +1,103 @@
+id: SC-017
+title: A CoreDNS config change breaks short-name resolution intermittently
+category: network
+alert:
+  name: IntermittentUpstreamFailures
+  severity: P2
+  service: reporting-api
+  fired_at: "2026-09-17T17:22:00Z"
+  description: >-
+    reporting-api is failing 30-40% of calls to several different upstreams.
+    Failures are intermittent and affect no single dependency consistently.
+world:
+  services:
+    - {name: reporting-api, tier: 2, owner: analytics, depends_on: [metrics-store, user-service, export-worker]}
+    - {name: metrics-store, tier: 2, owner: analytics, depends_on: []}
+    - {name: user-service, tier: 1, owner: identity, depends_on: []}
+    - {name: export-worker, tier: 3, owner: analytics, depends_on: []}
+  deploys:
+    - t: -50
+      service: platform-dns
+      version: "coredns-2026091703"
+      commit: 2b71aa5
+      author: platform-bot
+      summary: "CoreDNS Corefile update: reduce ndots from 5 to 1 and drop the cluster.local search domain"
+  logs:
+    reporting-api:
+      - {t: -60, level: INFO, msg: "GET metrics-store/summary 200 (elapsed=22ms)", count: 18000}
+      - {t: -40, level: ERROR, msg: "dial tcp: lookup user-service on 10.96.0.10:53: no such host", count: 2200}
+      - {t: -20, level: ERROR, msg: "dial tcp: lookup metrics-store on 10.96.0.10:53: no such host", count: 3900}
+      - {t: -5, level: INFO, msg: "GET user-service.prod.svc.cluster.local/users 200 (elapsed=9ms)", count: 6100}
+    user-service:
+      - {t: -30, level: INFO, msg: "GET /users 200 (elapsed=8ms)", count: 140000}
+    metrics-store:
+      - {t: -30, level: INFO, msg: "GET /summary 200 (elapsed=21ms)", count: 26000}
+  metrics:
+    reporting-api:
+      upstream_error_rate:
+        unit: percent
+        points: [{t: -180, v: 0.3}, {t: -60, v: 0.3}, {t: -50, v: 18}, {t: -20, v: 36}, {t: 0, v: 34}]
+      dns_resolution_failures_per_s:
+        unit: failures/s
+        points: [{t: -180, v: 0}, {t: -50, v: 41}, {t: 0, v: 88}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -180, v: 26}, {t: 0, v: 24}]
+    user-service:
+      http_5xx_rate:
+        unit: errors/s
+        points: [{t: -180, v: 0.05}, {t: 0, v: 0.05}]
+      requests_per_s:
+        unit: req/s
+        points: [{t: -180, v: 2400}, {t: 0, v: 1700}]
+    metrics-store:
+      http_5xx_rate:
+        unit: errors/s
+        points: [{t: -180, v: 0}, {t: 0, v: 0}]
+      requests_per_s:
+        unit: req/s
+        points: [{t: -180, v: 440}, {t: 0, v: 300}]
+  k8s:
+    - kind: ConfigMap
+      name: coredns
+      namespace: kube-system
+      spec:
+        data:
+          Corefile: "cluster.local:53 { kubernetes ; ndots 1 ; }"
+          previous_ndots: "5"
+          previous_search: "prod.svc.cluster.local svc.cluster.local cluster.local"
+      status: {last_applied: "coredns-2026091703"}
+      events:
+        - {t: -50, type: Normal, reason: ConfigMapUpdated, msg: "coredns ConfigMap updated; CoreDNS pods reloaded"}
+  runbooks:
+    - id: RB-045
+      title: "DNS resolution and search domains"
+      tags: [dns, coredns, ndots, search-domain, resolution, nxdomain, intermittent]
+      body: >-
+        Failures spread across several unrelated dependencies, with the
+        dependencies themselves healthy, point at something shared -- DNS,
+        network policy or the node -- rather than at any one service. "no such
+        host" is NXDOMAIN, a name resolution failure, not a connectivity one.
+        Callers using short names rely on the search domain list to complete
+        them; lowering ndots or removing a search domain breaks exactly those
+        callers while fully-qualified callers keep working, which is what makes
+        it look intermittent.
+ground_truth:
+  root_cause: >-
+    The CoreDNS Corefile update lowered ndots from 5 to 1 and dropped the
+    cluster.local search domains. Callers that use short names like
+    "user-service" no longer have those names completed and get NXDOMAIN, while
+    the same code paths using fully-qualified names still resolve -- which is why
+    failures look intermittent and spread across unrelated upstreams. Every
+    upstream service is healthy; their request volume fell only because callers
+    cannot resolve them.
+  must_include:
+    - ["dns", "coredns", "resolution", "nxdomain", "no such host"]
+    - ["ndots", "search domain", "short name", "fqdn", "fully qualified", "corefile"]
+    - ["config", "configmap", "change", "shared", "not the upstream", "upstreams are healthy"]
+  must_not_include:
+    - ["user-service is down", "metrics-store is down", "network partition", "reporting-api deploy"]
+  expected_actions: [revert_config_change]
+  red_herrings:
+    - "multiple dependencies fail, inviting a search for a shared outage among them rather than in resolution"
+    - "some requests succeed throughout, which reads as partial degradation of each upstream"
