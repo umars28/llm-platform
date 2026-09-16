@@ -68,11 +68,26 @@ def describe_exception(exc: BaseException) -> tuple[str, str]:
 
 
 def credentials_available() -> bool:
-    """Whether the SDK can resolve any credential without making a request."""
+    """Whether the SDK can resolve any credential without making a request.
+
+    The SDK resolves in order: ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, the
+    OAuth profile written by `ant auth login`, then workload identity
+    federation. All four land in `auth_headers`, so one check covers them.
+
+    Two cases are deliberately allowed through without credentials. A custom
+    ANTHROPIC_BASE_URL means a gateway or proxy is in front, and it may well
+    authenticate on the caller's behalf or need no auth at all. And
+    OPS_COPILOT_SKIP_AUTH_CHECK exists because a preflight that cannot be
+    overridden becomes the thing standing between someone and a working setup.
+    """
+    if os.environ.get("OPS_COPILOT_SKIP_AUTH_CHECK"):
+        return True
+    if os.environ.get("ANTHROPIC_BASE_URL"):
+        return True
+
     probe = AsyncAnthropic()
     if probe.api_key or getattr(probe, "auth_token", None):
         return True
-    # OAuth profiles and workload identity federation resolve through headers.
     try:
         return bool(probe.auth_headers)
     except Exception:

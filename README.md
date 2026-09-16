@@ -113,12 +113,48 @@ No numbers are quoted here until a full sweep has been run and committed.
 
 ## Running it
 
-Requires Python 3.11+ and an Anthropic API key.
+Requires Python 3.11+ and credentials for the Anthropic API.
 
 ```bash
 uv venv --python 3.12
 uv pip install -e ".[dev]"
+```
+
+### Credentials
+
+The SDK resolves credentials in this order, first match wins, and this project
+does nothing special on top of it:
+
+1. `ANTHROPIC_API_KEY`
+2. `ANTHROPIC_AUTH_TOKEN`
+3. the OAuth profile written by `ant auth login`
+4. workload identity federation
+
+So there are three ways to run it:
+
+```bash
+# A static key
 export ANTHROPIC_API_KEY=sk-ant-...
+
+# Or an OAuth profile, with no key to manage. The SDK finds it on its own.
+brew install anthropics/tap/ant
+ant auth login
+ant auth status          # shows which source won
+
+# Or a gateway that speaks the Anthropic Messages API
+export ANTHROPIC_BASE_URL=https://your-gateway.example/v1
+export ANTHROPIC_AUTH_TOKEN=...          # if the gateway wants one
+```
+
+A set `ANTHROPIC_API_KEY` silently shadows an OAuth profile, including an empty
+one — `unset` it rather than blanking it if you mean to use the profile.
+
+The harness refuses to start when it can resolve no credentials at all, because
+a sweep that fails at authentication reports 0% and reads as a failing agent.
+A custom `ANTHROPIC_BASE_URL` counts as configured, and
+`OPS_COPILOT_SKIP_AUTH_CHECK=1` overrides the preflight entirely.
+
+```bash
 
 ops-copilot list                  # the corpus
 ops-copilot run SC-001            # one incident, streaming the tool trace
