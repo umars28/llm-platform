@@ -78,10 +78,24 @@ def test_split_loses_nothing():
     assert not {s.id for s in train} & {s.id for s in test}
 
 
-def test_split_is_stratified_so_no_group_vanishes():
-    train, test = split(load_all())
-    assert {s.group for s in test} == {s.group for s in load_all()}
-    assert {s.group for s in train} == {s.group for s in load_all()}
+def test_every_group_is_tested_somewhere_across_the_folds():
+    """Per-fold group coverage is not achievable and should not be asserted.
+
+    Benign traps have two samples each, so with four folds a given trap cannot
+    appear in every fold's test set. Demanding it was satisfiable only by the
+    broken per-group split that left folds 2 and 3 with no negatives.
+    """
+    tested = set()
+    for fold in range(4):
+        tested |= {s.group for s in split(load_all(), fold=fold)[1]}
+    assert tested == {s.group for s in load_all()}
+
+
+def test_training_sets_keep_every_group():
+    """Training must still see every family, or a fold learns a partial world."""
+    for fold in range(4):
+        train, _ = split(load_all(), fold=fold)
+        assert {s.group for s in train} == {s.group for s in load_all()}
 
 
 def test_every_fold_is_a_different_test_set():
@@ -95,3 +109,20 @@ def test_both_classes_appear_in_each_half():
     for half in (train, test):
         assert any(s.is_attack for s in half)
         assert any(not s.is_attack for s in half)
+
+
+def test_every_fold_contains_both_classes():
+    """Benign traps have two samples each, so a per-group counter empties folds.
+
+    A false positive rate measured against zero negatives is not a low number,
+    it is not a number -- and it showed up as a nan AUC rather than as an error.
+    """
+    for fold in range(4):
+        _, test = split(load_all(), fold=fold)
+        assert any(s.is_attack for s in test), f"fold {fold} has no attacks"
+        assert any(not s.is_attack for s in test), f"fold {fold} has no benign samples"
+
+
+def test_folds_are_roughly_balanced_in_size():
+    sizes = [len(split(load_all(), fold=f)[1]) for f in range(4)]
+    assert max(sizes) - min(sizes) <= 2

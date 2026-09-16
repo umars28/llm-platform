@@ -64,20 +64,26 @@ def load_all() -> list[Sample]:
 def split(samples: list[Sample], fold: int = 0, folds: int = 4) -> tuple[list[Sample], list[Sample]]:
     """Deterministic stratified split for held-out evaluation.
 
-    Stratified by group so every attack family and every benign trap appears in
-    both halves -- an unstratified split on a corpus this size can drop a whole
-    family from training and make the result meaningless.
+    Stratified by class first, then ordered by group, and assigned round-robin
+    from a per-class counter that carries across groups.
 
-    Assignment is by position within each group rather than by hash, so the
-    split is stable across runs and machines without seeding anything.
+    Assigning by position *within* each group is the obvious approach and it is
+    wrong here: benign traps have two samples each, so `index % 4` put every
+    benign sample in folds 0 and 1 and left folds 2 and 3 with no negatives at
+    all. Metrics computed on those folds were undefined, and a false positive
+    rate measured against zero negatives is not a low number -- it is not a
+    number. Carrying the counter across groups keeps small groups spread.
+
+    The assignment is positional rather than hashed, so it is stable across runs
+    and machines without seeding anything.
     """
-    by_group: dict[str, list[Sample]] = {}
-    for sample in samples:
-        by_group.setdefault(sample.group, []).append(sample)
+    by_class: dict[bool, list[Sample]] = {True: [], False: []}
+    for sample in sorted(samples, key=lambda s: (s.group, s.id)):
+        by_class[sample.is_attack].append(sample)
 
     train: list[Sample] = []
     test: list[Sample] = []
-    for group in sorted(by_group):
-        for index, sample in enumerate(by_group[group]):
-            (test if index % folds == fold else train).append(sample)
+    for members in by_class.values():
+        for position, sample in enumerate(members):
+            (test if position % folds == fold else train).append(sample)
     return train, test
