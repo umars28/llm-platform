@@ -1,0 +1,54 @@
+name: llm-eval
+
+# The gate runs on pull requests, which is the only place it can do its job:
+# a suite that runs after merge reports history rather than preventing it.
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  deterministic:
+    # Always runs, needs no credentials, and blocks the merge on its own. Most
+    # regressions are caught here, and this half works on a fork's pull request
+    # where secrets are unavailable.
+    name: deterministic checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv venv --python 3.12
+      - run: uv pip install -e ".[dev]"
+      - name: unit tests
+        run: uv run pytest -q
+      - name: eval gate, deterministic assertions only
+        run: uv run llm-eval gate --no-judge
+
+  judged:
+    # Costs money and needs a key, so it is separated rather than folded in.
+    # A fork's pull request has no secrets; skipping is correct there, and the
+    # job above has already blocked anything deterministically detectable.
+    name: judged checks
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv venv --python 3.12
+      - run: uv pip install -e ".[dev]"
+      - name: restore judge cache
+        uses: actions/cache@v4
+        with:
+          # Keyed on the rubric so a rubric change starts a fresh cache rather
+          # than silently reusing verdicts from a different grader.
+          path: .judge-cache
+          key: judge-${{ hashFiles('src/llm_eval/judge.py', 'cases/**') }}
+      - name: eval gate, with judge
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: uv run llm-eval gate
+      - name: upload run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-run
+          path: runs/
