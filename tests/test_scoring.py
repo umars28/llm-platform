@@ -235,3 +235,20 @@ def test_an_unknown_model_falls_back_to_the_most_expensive_tier():
     from ops_copilot.agent import DEFAULT_PRICING, pricing_for
 
     assert pricing_for("some-future-model") == DEFAULT_PRICING
+
+
+def test_a_free_gateway_tier_costs_nothing():
+    """Reporting Opus 5 rates for a free model produced a confident $0.29 for
+    a run that cost nothing at all."""
+    from ops_copilot.agent import AgentRun, pricing_for
+
+    assert pricing_for("nex-agi/nex-n2.5-pro:free") == (0.0, 0.0, 0.0)
+    run = AgentRun("SC-001", "t", model="nex-agi/nex-n2.5-pro:free")
+    run.input_tokens, run.output_tokens = 500_000, 50_000
+    assert run.cost_usd == 0.0
+
+
+def test_a_paid_model_is_still_priced_normally():
+    from ops_copilot.agent import DEFAULT_PRICING, pricing_for
+
+    assert pricing_for("some-unknown-paid-model") == DEFAULT_PRICING

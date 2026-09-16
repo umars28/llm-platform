@@ -158,11 +158,14 @@ DEFAULT_PRICING = PRICING["claude-opus-5"]
 def pricing_for(model: str) -> tuple[float, float, float]:
     """Look up list price, tolerating gateway namespacing like "anthropic/".
 
-    An unknown model falls back to Opus 5 rates, so a cost figure is never
-    silently too low -- an overstated cost prompts a question, an understated
-    one gets quoted.
+    A gateway's ":free" tier really is free, and reporting Opus 5 rates for it
+    produced a confident $0.29 for a run that cost nothing. Everything else
+    unknown still falls back to the dearest tier, because an overstated cost
+    prompts a question and an understated one gets quoted.
     """
     name = model.split("/")[-1].lower()
+    if name.endswith(":free"):
+        return (0.0, 0.0, 0.0)
     return PRICING.get(name, DEFAULT_PRICING)
 
 SYSTEM_PROMPT = """\
