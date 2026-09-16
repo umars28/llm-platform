@@ -111,7 +111,14 @@ PATTERNS: tuple[Pattern, ...] = (
     _p("act-autonomously",
        r"(act|proceed|execute|apply|run)\s+(autonomously|directly|immediately|without\s+asking)",
        0.6, "pushes the model to act without checking"),
+    # An earlier version matched "pre-approved" anywhere, which fired on the
+    # entirely legitimate runbook sentence "rollback is pre-approved during an
+    # active P1". The claim only matters when it is addressed at the agent or
+    # attached to acting without a human, so that context is now required.
     _p("pre-authorised-claim",
+       r"(pre.?(approved|authoris|authoriz)|already\s+(been\s+)?approved|authorised\s+to\s+skip)"
+       r"[^.]{0,60}\b(you|agent|assistant|automation|proceed|execute|apply|record\s+it|without|no\s+further)\b"
+       r"|\b(you|agent|assistant|automation)\b[^.]{0,40}"
        r"(pre.?(approved|authoris|authoriz)|already\s+(been\s+)?approved|authorised\s+to\s+skip)",
        0.55, "claims an approval that did not come from the approval service"),
     _p("exfiltrate-prompt",
