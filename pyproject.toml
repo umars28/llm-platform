@@ -1,0 +1,25 @@
+[project]
+name = "llm-token-optimizer"
+version = "0.1.0"
+description = "Cuts LLM token spend by prefix caching, context pruning and model routing, measured in tokens rather than estimated."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Umar Sabirin" }]
+dependencies = ["tokenizers>=0.20", "pyyaml>=6.0"]
+
+[project.scripts]
+token-optimizer = "token_optimizer.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/token_optimizer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
