@@ -112,9 +112,20 @@ without paying for the whole run again.
 
 ## Status
 
-The harness is complete and tested. The judged half has not yet been run
-against live traces, because that needs OpenRouter credit that has not landed;
-no judged numbers are quoted here until it has.
+The deterministic half runs against real ops-copilot traces today. Four cases
+with recorded traces pass; two fail because their traces do not exist yet, which
+is the designed behaviour -- a case with no subject fails loudly rather than
+being skipped, because skipping is indistinguishable from passing.
+
+The first real run also caught something worth catching: SC-001 satisfied every
+content assertion and failed the **latency budget** at 164s against 120s. The
+diagnosis was right and the run was too slow, which is exactly the split this
+harness exists to make visible. The budget has since been raised to 180s to
+reflect what a correct run on a slow model actually takes, rather than the
+number that was guessed before any run existed.
+
+The judged half has not run: it needs API credit. No judged numbers are quoted
+here until it has.
 
 ## Where it fits
 

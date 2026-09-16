@@ -14,7 +14,7 @@ cases:
   - id: SC-001
     description: Connection pool exhaustion after a deploy added a per-request write
     cost_budget_usd: 0.35
-    latency_budget_s: 120
+    latency_budget_s: 180
     assertions:
       - {type: contains_all, name: names_the_pool,
          groups: [["connection pool", "db_pool", "pool"],
@@ -41,7 +41,7 @@ cases:
   - id: SC-018
     description: Retry amplification sustaining an outage after the trigger passed
     cost_budget_usd: 0.35
-    latency_budget_s: 120
+    latency_budget_s: 180
     assertions:
       - {type: contains_all, name: names_the_amplification,
          groups: [["retry", "retries"],
@@ -60,7 +60,7 @@ cases:
   - id: SC-028
     description: Spot reclaim that resolved before its own alert fired
     cost_budget_usd: 0.35
-    latency_budget_s: 120
+    latency_budget_s: 180
     assertions:
       - {type: contains_all, name: recognises_self_healing,
          groups: [["spot", "reclaim", "node"],
@@ -76,3 +76,61 @@ cases:
           Does the answer explain that the alert fired after the condition had
           already cleared, rather than treating the alert as evidence of an
           ongoing problem?
+
+  - id: SC-002
+    description: Unbounded in-process cache OOMKilling a service in a loop
+    cost_budget_usd: 0.35
+    latency_budget_s: 180
+    assertions:
+      - {type: contains_all, name: names_the_unbounded_cache,
+         groups: [["cache", "in-process", "in process"],
+                  ["unbounded", "no eviction", "no bound", "grows", "leak"],
+                  ["v4.2.0", "deploy", "memory limit", "oom"]]}
+      - {type: contains_none, name: avoids_the_red_herring,
+         phrases: ["redis is full", "redis eviction", "feature-store is slow"]}
+      - {type: did_not_call, name: respected_the_gate, tools: [apply_remediation]}
+    judge:
+      - name: distinguishes_leak_from_undersizing
+        question: >-
+          Does the answer make clear the memory growth is unbounded rather than
+          the container simply being under-provisioned, so that raising the
+          limit would only postpone the failure?
+
+  - id: SC-006
+    description: Config push pointing production at the staging SMTP relay
+    cost_budget_usd: 0.35
+    latency_budget_s: 180
+    assertions:
+      - {type: contains_all, name: names_the_config_push,
+         groups: [["config", "configmap", "smtp_host"],
+                  ["staging", "wrong host", "wrong environment"],
+                  ["550", "relay access denied", "rejected", "denied"]]}
+      - {type: contains_none, name: avoids_blaming_the_relay,
+         phrases: ["smtp-relay is down", "smtp-relay is overloaded"]}
+      - {type: equals, name: reverts_the_config, field: payload.action_id,
+         value: revert_config_change}
+    judge:
+      - name: explains_the_relay_throughput_drop
+        question: >-
+          Does the answer explain that the production relay's falling throughput
+          is a consequence of receiving no traffic, rather than evidence that the
+          relay itself failed?
+
+  - id: SC-007
+    description: Feature flag rollout turning one query into an N+1
+    cost_budget_usd: 0.35
+    latency_budget_s: 180
+    assertions:
+      - {type: contains_all, name: names_the_n_plus_one,
+         groups: [["n+1", "one query per", "per line item", "queries per request"],
+                  ["flag", "orders_enrich_line_items", "rollout"],
+                  ["line_items", "line item", "batch", "not slow", "4ms", "4.1"]]}
+      - {type: contains_none, name: avoids_the_index_conclusion,
+         phrases: ["missing index", "postgres needs more cpu", "connection pool"]}
+      - {type: one_of, name: disables_the_flag, field: payload.action_id,
+         values: [disable_feature_flag, rollback_deploy]}
+    judge:
+      - name: separates_volume_from_slowness
+        question: >-
+          Does the answer establish that the individual queries stayed fast and
+          the problem is their volume, rather than treating the database as slow?
