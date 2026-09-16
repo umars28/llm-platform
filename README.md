@@ -152,6 +152,10 @@ export OPS_COPILOT_MODEL=anthropic/claude-opus-5
 still occupies its precedence slot, and the SDK then sends both credentials and
 the request is rejected.
 
+`OPS_COPILOT_MAX_TOKENS` matters on gateways: they reserve budget up front as
+`max_tokens x output price`, so a low spend limit rejects a large request even
+when the real response would be cheap.
+
 `OPS_COPILOT_MODEL` exists because gateways namespace their model ids. Adaptive
 thinking and `effort` are Anthropic-specific, so they are sent only when the
 model id resolves to a Claude model; `OPS_COPILOT_NATIVE_PARAMS=0` or `1` forces

@@ -32,6 +32,11 @@ from .world import Scenario, load_scenario
 # not. Both reach the same model.
 MODEL = os.environ.get("OPS_COPILOT_MODEL", "claude-opus-5")
 
+# Gateways reserve budget up front as max_tokens x output price, so a small
+# spend limit rejects a large request outright even when the actual response
+# would be cheap. Lowering this trades headroom for the ability to run at all.
+MAX_TOKENS = int(os.environ.get("OPS_COPILOT_MAX_TOKENS", "16000"))
+
 
 def _supports_native_params(model: str) -> bool:
     """Whether to send adaptive thinking and effort.
@@ -134,8 +139,31 @@ def credentials_available() -> bool:
     except Exception:
         return False
 
-# Opus 5 list price, USD per million tokens.
-PRICE_IN, PRICE_OUT, PRICE_CACHE_READ = 5.00, 25.00, 0.50
+# List price in USD per million tokens: (input, output, cache read).
+# Costing every run at Opus 5 prices overstated a Haiku run five-fold, which
+# matters because these figures are the project's headline numbers.
+PRICING = {
+    "claude-fable-5": (10.00, 50.00, 1.00),
+    "claude-opus-5": (5.00, 25.00, 0.50),
+    "claude-opus-4-8": (5.00, 25.00, 0.50),
+    "claude-opus-4-7": (5.00, 25.00, 0.50),
+    "claude-opus-4-6": (5.00, 25.00, 0.50),
+    "claude-sonnet-5": (3.00, 15.00, 0.30),
+    "claude-sonnet-4-6": (3.00, 15.00, 0.30),
+    "claude-haiku-4-5": (1.00, 5.00, 0.10),
+}
+DEFAULT_PRICING = PRICING["claude-opus-5"]
+
+
+def pricing_for(model: str) -> tuple[float, float, float]:
+    """Look up list price, tolerating gateway namespacing like "anthropic/".
+
+    An unknown model falls back to Opus 5 rates, so a cost figure is never
+    silently too low -- an overstated cost prompts a question, an understated
+    one gets quoted.
+    """
+    name = model.split("/")[-1].lower()
+    return PRICING.get(name, DEFAULT_PRICING)
 
 SYSTEM_PROMPT = """\
 You are an on-call SRE assistant diagnosing a live production incident.
@@ -171,6 +199,7 @@ That queues the change for a human; nothing you can call applies it yourself.
 class AgentRun:
     scenario_id: str
     scenario_title: str
+    model: str = MODEL
     proposal: dict[str, Any] | None = None
     change_requests: list[dict[str, Any]] = field(default_factory=list)
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
@@ -195,16 +224,18 @@ class AgentRun:
 
     @property
     def cost_usd(self) -> float:
+        price_in, price_out, price_cache = pricing_for(self.model)
         return (
-            self.input_tokens * PRICE_IN
-            + self.output_tokens * PRICE_OUT
-            + self.cache_read_tokens * PRICE_CACHE_READ
+            self.input_tokens * price_in
+            + self.output_tokens * price_out
+            + self.cache_read_tokens * price_cache
         ) / 1_000_000
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "scenario_id": self.scenario_id,
             "scenario_title": self.scenario_title,
+            "model": self.model,
             "proposal": self.proposal,
             "change_requests": self.change_requests,
             "tool_calls": self.tool_calls,
@@ -258,7 +289,9 @@ async def diagnose(
 ) -> AgentRun:
     """Run one incident end to end and return the trace."""
     scenario = load_scenario(scenario_ref)
-    run = AgentRun(scenario_id=scenario.id, scenario_title=scenario.title)
+    run = AgentRun(
+        scenario_id=scenario.id, scenario_title=scenario.title, model=model
+    )
     client = AsyncAnthropic()
 
     def emit(kind: str, payload: Any) -> None:
@@ -275,7 +308,7 @@ async def diagnose(
 
                 params: dict[str, Any] = {
                     "model": model,
-                    "max_tokens": 16000,
+                    "max_tokens": MAX_TOKENS,
                     "max_iterations": max_iterations,
                     "system": SYSTEM_PROMPT,
                     "tools": [async_mcp_tool(t, mcp_client) for t in listed.tools],

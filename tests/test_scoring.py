@@ -208,3 +208,30 @@ def test_repeated_provider_errors_are_truncated_for_display():
     assert len(trimmed) < 450
     assert trimmed.endswith("[truncated]")
     assert summarise_error("short message") == "short message"
+
+
+def test_cost_follows_the_model_not_a_hardcoded_tier():
+    """A Haiku run costed at Opus rates overstates by five-fold."""
+    from ops_copilot.agent import AgentRun
+
+    opus = AgentRun("SC-001", "t", model="claude-opus-5")
+    haiku = AgentRun("SC-001", "t", model="anthropic/claude-haiku-4-5")
+    for run in (opus, haiku):
+        run.input_tokens, run.output_tokens = 100_000, 10_000
+
+    assert round(opus.cost_usd, 4) == 0.75      # 100k*5 + 10k*25
+    assert round(haiku.cost_usd, 4) == 0.15     # 100k*1 + 10k*5
+    assert opus.cost_usd == haiku.cost_usd * 5
+
+
+def test_gateway_namespacing_does_not_defeat_the_price_lookup():
+    from ops_copilot.agent import pricing_for
+
+    assert pricing_for("anthropic/claude-haiku-4-5") == pricing_for("claude-haiku-4-5")
+
+
+def test_an_unknown_model_falls_back_to_the_most_expensive_tier():
+    """Overstating cost prompts a question; understating it gets quoted."""
+    from ops_copilot.agent import DEFAULT_PRICING, pricing_for
+
+    assert pricing_for("some-future-model") == DEFAULT_PRICING
