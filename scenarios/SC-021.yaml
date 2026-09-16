@@ -1,0 +1,90 @@
+id: SC-021
+title: A runaway batch job consumes the shared Postgres connection budget
+category: resource-exhaustion
+alert:
+  name: MultiServiceDatabaseErrors
+  severity: P1
+  service: postgres-primary
+  fired_at: "2026-09-18T10:05:00Z"
+  description: >-
+    Four unrelated services are failing to obtain database connections.
+    postgres-primary reports "remaining connection slots are reserved".
+world:
+  services:
+    - {name: postgres-primary, tier: 1, owner: platform-team, depends_on: []}
+    - {name: orders-api, tier: 1, owner: commerce, depends_on: [postgres-primary]}
+    - {name: accounts-api, tier: 1, owner: identity, depends_on: [postgres-primary]}
+    - {name: reconciliation-job, tier: 3, owner: finance-eng, depends_on: [postgres-primary]}
+  deploys:
+    - t: -42
+      service: reconciliation-job
+      version: v1.3.0
+      commit: 8c04fb2
+      author: finance-bot
+      summary: "Parallelise reconciliation across shards; worker pool sized from CPU count, each worker opens its own connection"
+  logs:
+    orders-api:
+      - {t: -20, level: ERROR, msg: "FATAL: remaining connection slots are reserved for non-replication superuser connections", count: 3400}
+    accounts-api:
+      - {t: -18, level: ERROR, msg: "FATAL: remaining connection slots are reserved for non-replication superuser connections", count: 2100}
+    postgres-primary:
+      - {t: -30, level: WARN, msg: "connection count 340/400"}
+      - {t: -5, level: WARN, msg: "connection count 400/400, rejecting new connections", count: 5400}
+    reconciliation-job:
+      - {t: -42, level: INFO, msg: "starting reconciliation, worker_pool=256 (detected 64 vCPU x 4)"}
+      - {t: -30, level: INFO, msg: "opened 256 database connections"}
+  metrics:
+    postgres-primary:
+      active_connections:
+        unit: connections
+        points: [{t: -120, v: 138}, {t: -42, v: 141}, {t: -30, v: 340}, {t: -10, v: 400}, {t: 0, v: 400}]
+      max_connections:
+        unit: connections
+        points: [{t: -120, v: 400}, {t: 0, v: 400}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 27}, {t: 0, v: 44}]
+      queries_per_s:
+        unit: queries/s
+        points: [{t: -120, v: 3100}, {t: 0, v: 4200}]
+      mean_query_duration_ms:
+        unit: ms
+        points: [{t: -120, v: 2.8}, {t: 0, v: 3.4}]
+    orders-api:
+      db_connection_error_rate:
+        unit: percent
+        points: [{t: -120, v: 0}, {t: -20, v: 41}, {t: 0, v: 78}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 36}, {t: 0, v: 18}]
+    reconciliation-job:
+      open_connections:
+        unit: connections
+        points: [{t: -120, v: 4}, {t: -42, v: 8}, {t: -30, v: 256}, {t: 0, v: 256}]
+  k8s:
+    - kind: Job
+      name: reconciliation-job
+      namespace: prod
+      spec: {image: "registry.internal/reconciliation-job:v1.3.0", parallelism: 1, node_selector: "m6i.16xlarge"}
+      status: {active: 1, started_minutes_ago: 42, worker_pool: 256}
+      events:
+        - {t: -42, type: Normal, reason: Started, msg: "Created pod reconciliation-job-7d31"}
+  runbooks: []
+ground_truth:
+  root_cause: >-
+    reconciliation-job v1.3.0 sizes its worker pool from the host CPU count and
+    landed on a 64-vCPU node, producing 256 workers each holding its own
+    connection. That took postgres-primary from a steady 138 connections to its
+    400 limit, so every other service is refused new connections. Postgres itself
+    is healthy -- 44% CPU and 3.4ms mean query duration; the resource that ran
+    out is the connection budget, not database capacity.
+  must_include:
+    - ["reconciliation-job", "batch job", "job"]
+    - ["connection", "256", "max_connections", "400", "budget", "slots"]
+    - ["worker", "parallel", "pool", "v1.3.0", "cpu count"]
+  must_not_include:
+    - ["postgres is overloaded", "postgres cpu", "slow queries", "orders-api deploy"]
+  expected_actions: [rollback_deploy]
+  red_herrings:
+    - "the alert names postgres-primary, which is healthy and merely enforcing its limit"
+    - "four services fail at once, which reads as a database outage rather than one greedy client"

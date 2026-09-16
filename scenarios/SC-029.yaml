@@ -1,0 +1,112 @@
+id: SC-029
+title: A stuck Kafka consumer group rebalance halts order fulfilment
+category: dependency-failure
+alert:
+  name: FulfilmentLagGrowing
+  severity: P1
+  service: fulfilment-worker
+  fired_at: "2026-09-19T03:20:00Z"
+  description: >-
+    fulfilment-worker consumer lag has grown to 220000 messages. No orders have
+    been fulfilled in 18 minutes. The workers report themselves healthy.
+world:
+  services:
+    - {name: fulfilment-worker, tier: 1, owner: logistics, depends_on: [kafka-cluster]}
+    - {name: kafka-cluster, tier: 1, owner: platform-team, depends_on: []}
+    - {name: orders-api, tier: 1, owner: commerce, depends_on: [kafka-cluster]}
+  deploys:
+    - t: -32
+      service: fulfilment-worker
+      version: v8.3.0
+      commit: 22de4a1
+      author: arif.m
+      summary: "Increase max_poll_interval_ms handling for slow enrichment; rolling restart of 24 consumers"
+  logs:
+    fulfilment-worker:
+      - {t: -32, level: INFO, msg: "consumer joining group fulfilment (member=worker-0)", count: 24}
+      - {t: -28, level: WARN, msg: "group fulfilment rebalancing (generation=1841)", count: 24}
+      - {t: -20, level: WARN, msg: "group fulfilment rebalancing (generation=1902)", count: 24}
+      - {t: -4, level: WARN, msg: "group fulfilment rebalancing (generation=2140)", count: 24}
+      - {t: -1, level: INFO, msg: "healthcheck ok, partitions_assigned=0", count: 24}
+    kafka-cluster:
+      - {t: -20, level: WARN, msg: "group fulfilment: member worker-11 left group (session timeout)", count: 90}
+      - {t: -5, level: WARN, msg: "group fulfilment: rebalance in progress, 24 members, 0 stable assignments", count: 60}
+    orders-api:
+      - {t: -10, level: INFO, msg: "order published to topic orders (partition=7)", count: 61000}
+  metrics:
+    fulfilment-worker:
+      consumer_lag:
+        unit: messages
+        points: [{t: -120, v: 420}, {t: -32, v: 510}, {t: -20, v: 68000}, {t: 0, v: 220000}]
+      partitions_assigned:
+        unit: partitions
+        points: [{t: -120, v: 48}, {t: -32, v: 48}, {t: -28, v: 0}, {t: 0, v: 0}]
+      rebalance_count:
+        unit: rebalances
+        points: [{t: -120, v: 1}, {t: -32, v: 2}, {t: -20, v: 61}, {t: 0, v: 299}]
+      messages_processed_per_s:
+        unit: msg/s
+        points: [{t: -120, v: 340}, {t: -28, v: 0}, {t: 0, v: 0}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 46}, {t: 0, v: 4}]
+      session_timeout_ms:
+        unit: ms
+        points: [{t: -120, v: 10000}, {t: -32, v: 10000}, {t: 0, v: 10000}]
+      max_poll_interval_ms:
+        unit: ms
+        points: [{t: -120, v: 300000}, {t: -32, v: 900000}, {t: 0, v: 900000}]
+    kafka-cluster:
+      under_replicated_partitions:
+        unit: partitions
+        points: [{t: -120, v: 0}, {t: 0, v: 0}]
+      broker_cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 38}, {t: 0, v: 41}]
+      produce_rate:
+        unit: msg/s
+        points: [{t: -120, v: 350}, {t: 0, v: 362}]
+  k8s:
+    - kind: Deployment
+      name: fulfilment-worker
+      namespace: prod
+      spec:
+        replicas: 24
+        image: "registry.internal/fulfilment-worker:v8.3.0"
+        env: {MAX_POLL_INTERVAL_MS: "900000", SESSION_TIMEOUT_MS: "10000", HEARTBEAT_INTERVAL_MS: "12000"}
+      status: {readyReplicas: 24, restarts_last_hour: 24}
+      events:
+        - {t: -32, type: Normal, reason: ScalingReplicaSet, msg: "Rolling update to v8.3.0 complete, 24/24 ready"}
+  runbooks:
+    - id: RB-054
+      title: "Kafka consumer group rebalance loops"
+      tags: [kafka, consumer, rebalance, group, lag, heartbeat, session-timeout, partitions]
+      body: >-
+        A consumer group stuck rebalancing processes nothing while every member
+        reports itself healthy -- readiness probes do not know about partition
+        assignment, so check partitions_assigned rather than pod status. The
+        usual cause is a heartbeat interval at or above the session timeout: the
+        broker expires members faster than they can heartbeat, each expiry
+        triggers another rebalance, and the group never reaches a stable
+        assignment. Heartbeat interval must be well below session timeout,
+        conventionally a third of it.
+ground_truth:
+  root_cause: >-
+    fulfilment-worker v8.3.0 raised max_poll_interval_ms to 900000 but left
+    SESSION_TIMEOUT_MS at 10000 while setting HEARTBEAT_INTERVAL_MS to 12000 --
+    a heartbeat interval longer than the session timeout. Members are therefore
+    expired by the broker before they can heartbeat, each expiry triggers another
+    rebalance, and the group has churned through 299 rebalances without ever
+    reaching a stable assignment. partitions_assigned is 0, so nothing is
+    consumed and lag has grown to 220000. Kafka itself is healthy with zero
+    under-replicated partitions and normal produce rate.
+  must_include:
+    - ["rebalance", "consumer group", "group", "partitions_assigned", "partition assignment"]
+    - ["heartbeat", "session timeout", "session_timeout", "12000", "10000", "longer than", "exceeds"]
+    - ["v8.3.0", "deploy", "config", "max_poll_interval", "loop", "never stable", "churn"]
+  must_not_include:
+    - ["kafka is down", "kafka is overloaded", "broker failure", "needs more workers", "under-replicated"]
+  expected_actions: [rollback_deploy, revert_config_change]
+  red_herrings:
+    - "all 24 pods are ready and pass health checks, so pod-level checks show a healthy fleet"
+    - "the obvious suspect is max_poll_interval_ms because it is what the release changed, but the fatal value is the heartbeat interval it left behind"

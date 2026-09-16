@@ -1,0 +1,96 @@
+id: SC-025
+title: Quota exhaustion on a third-party provider throttles outbound SMS
+category: dependency-failure
+alert:
+  name: SMSDeliveryFailures
+  severity: P2
+  service: sms-gateway
+  fired_at: "2026-09-18T18:05:00Z"
+  description: >-
+    sms-gateway is failing 82% of sends with HTTP 429 from the upstream
+    provider. One-time passcodes are not being delivered.
+world:
+  services:
+    - {name: sms-gateway, tier: 1, owner: comms, depends_on: [provider-twilio-equivalent]}
+    - {name: notification-service, tier: 2, owner: comms, depends_on: [sms-gateway]}
+    - {name: marketing-blast, tier: 3, owner: growth, depends_on: [sms-gateway]}
+  deploys:
+    - t: -75
+      service: marketing-blast
+      version: v1.2.0
+      commit: ba31c70
+      author: growth-bot
+      summary: "Launch spring campaign: 1.4M promotional SMS over 2 hours, no rate limiting on the sender side"
+  logs:
+    sms-gateway:
+      - {t: -90, level: INFO, msg: "sms sent (provider_status=200)", count: 42000}
+      - {t: -50, level: WARN, msg: "provider returned 429 Too Many Requests (quota_window=hourly)", count: 18000}
+      - {t: -5, level: ERROR, msg: "provider returned 429 Too Many Requests (quota_window=hourly)", count: 61000}
+    marketing-blast:
+      - {t: -75, level: INFO, msg: "campaign started: 1400000 recipients, concurrency=400"}
+    notification-service:
+      - {t: -10, level: ERROR, msg: "otp delivery failed via sms-gateway", count: 4100}
+  metrics:
+    sms-gateway:
+      send_success_rate:
+        unit: percent
+        points: [{t: -180, v: 99.5}, {t: -75, v: 99.4}, {t: -50, v: 61}, {t: 0, v: 18}]
+      provider_429_rate:
+        unit: percent
+        points: [{t: -180, v: 0}, {t: -50, v: 38}, {t: 0, v: 82}]
+      sends_attempted_per_s:
+        unit: sends/s
+        points: [{t: -180, v: 120}, {t: -75, v: 124}, {t: -50, v: 2900}, {t: 0, v: 3100}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -180, v: 20}, {t: 0, v: 58}]
+      provider_hourly_quota_used_percent:
+        unit: percent
+        points: [{t: -180, v: 22}, {t: -75, v: 24}, {t: -50, v: 100}, {t: 0, v: 100}]
+      otp_sends_per_s:
+        unit: sends/s
+        points: [{t: -180, v: 96}, {t: 0, v: 98}]
+      marketing_sends_per_s:
+        unit: sends/s
+        points: [{t: -180, v: 24}, {t: -75, v: 28}, {t: 0, v: 3000}]
+  k8s:
+    - kind: Deployment
+      name: sms-gateway
+      namespace: prod
+      spec:
+        replicas: 4
+        image: "registry.internal/sms-gateway:v3.1.0"
+        env: {PROVIDER_HOURLY_QUOTA: "180000", PRIORITY_QUEUES: "false"}
+      status: {readyReplicas: 4, restarts_last_hour: 0}
+      events: []
+  runbooks:
+    - id: RB-052
+      title: "Shared quota and traffic priority"
+      tags: [quota, rate-limit, 429, third-party, provider, priority, shedding]
+      body: >-
+        A shared outbound quota has no notion of importance: whichever caller
+        arrives first consumes it. When a low-priority bulk sender saturates the
+        window, high-priority traffic on the same path fails identically. Break
+        the failure down by caller before treating it as a provider fault --
+        429 means the provider is enforcing an agreed limit, not that it is
+        broken. Shed or throttle the bulk sender rather than raising the quota
+        mid-incident, which takes provider lead time.
+ground_truth:
+  root_cause: >-
+    The spring campaign launched by marketing-blast 75 minutes ago sends 1.4M
+    promotional messages at concurrency 400 with no sender-side rate limiting,
+    taking sms-gateway from 124 to 3100 sends/s and consuming 100% of the
+    provider's 180000/hour quota. The provider now returns 429 for everything on
+    the shared path, so OTP traffic -- flat at about 98 sends/s throughout --
+    fails alongside the campaign. sms-gateway has no priority queueing, so bulk
+    and critical traffic compete equally for the same quota.
+  must_include:
+    - ["quota", "rate limit", "429", "throttl"]
+    - ["marketing-blast", "campaign", "bulk", "promotional", "1.4m", "3000"]
+    - ["otp", "priority", "shared", "critical", "same path", "competing"]
+  must_not_include:
+    - ["provider outage", "provider is down", "sms-gateway bug", "needs more replicas"]
+  expected_actions: [shed_load, increase_rate_limit]
+  red_herrings:
+    - "the failing calls are to a third party, inviting a 'vendor incident' conclusion"
+    - "OTP send volume never changed, so the victim traffic shows no anomaly of its own"
