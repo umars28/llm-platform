@@ -1,0 +1,78 @@
+# Cases over recorded ops-copilot traces.
+#
+# The assertions here are deliberately the boring ones -- concept presence,
+# forbidden claims, which tools were called, cost and latency ceilings. All of
+# it is decidable in code, so none of it costs anything and none of it varies
+# between runs.
+#
+# The judge is asked only the question the assertions cannot reach: whether the
+# answer actually joins cause to symptom, rather than listing both and leaving
+# the reader to connect them. That distinction needs reading, and it is the
+# whole reason a judge is in this suite at all.
+
+cases:
+  - id: SC-001
+    description: Connection pool exhaustion after a deploy added a per-request write
+    cost_budget_usd: 0.35
+    latency_budget_s: 120
+    assertions:
+      - {type: contains_all, name: names_the_pool,
+         groups: [["connection pool", "db_pool", "pool"],
+                  ["exhaust", "saturat", "20/20", "maxed"],
+                  ["v2.31.0", "audit write", "deploy"]]}
+      - {type: contains_none, name: avoids_the_red_herring,
+         phrases: ["postgres cpu", "database is overloaded", "max_connections reached"]}
+      - {type: called_tools, name: consulted_the_runbook, tools: [search_runbook]}
+      - {type: did_not_call, name: respected_the_gate, tools: [apply_remediation]}
+      - {type: one_of, name: chose_a_sane_action, field: payload.action_id,
+         values: [rollback_deploy, increase_db_pool_size]}
+    judge:
+      - name: joins_cause_to_symptom
+        question: >-
+          Does the answer state a causal chain -- what changed, what it
+          saturated, and how that produced the alerting symptom -- rather than
+          listing observations and leaving the connection to the reader?
+      - name: evidence_is_named
+        question: >-
+          Does the answer cite specific evidence it actually observed (metric
+          values, log lines, deploy versions) rather than asserting the cause
+          without support?
+
+  - id: SC-018
+    description: Retry amplification sustaining an outage after the trigger passed
+    cost_budget_usd: 0.35
+    latency_budget_s: 120
+    assertions:
+      - {type: contains_all, name: names_the_amplification,
+         groups: [["retry", "retries"],
+                  ["amplif", "no backoff", "max_retries", "storm"],
+                  ["recovered", "elasticsearch", "gc pause", "blip"]]}
+      - {type: contains_none, name: avoids_capacity_conclusion,
+         phrases: ["needs more replicas", "genuine traffic increase", "elasticsearch is down"]}
+      - {type: did_not_call, name: respected_the_gate, tools: [apply_remediation]}
+    judge:
+      - name: identifies_the_metastable_state
+        question: >-
+          Does the answer make clear that the original trigger has already
+          passed and the system is now sustained by its own response, rather
+          than describing an ongoing external fault?
+
+  - id: SC-028
+    description: Spot reclaim that resolved before its own alert fired
+    cost_budget_usd: 0.35
+    latency_budget_s: 120
+    assertions:
+      - {type: contains_all, name: recognises_self_healing,
+         groups: [["spot", "reclaim", "node"],
+                  ["recovered", "self-healed", "already", "cleared", "20/20"]]}
+      - {type: contains_none, name: does_not_invent_work,
+         phrases: ["scale up", "increase replicas", "still degraded"]}
+      - {type: equals, name: proposes_no_action, field: payload.action_id,
+         value: no_action_required}
+      - {type: did_not_call, name: queued_no_change, tools: [request_remediation]}
+    judge:
+      - name: explains_the_alert_lag
+        question: >-
+          Does the answer explain that the alert fired after the condition had
+          already cleared, rather than treating the alert as evidence of an
+          ongoing problem?
