@@ -22,6 +22,23 @@ token-optimizer measure workloads/ops-copilot.json --routing 24
 token-optimizer audit path/to/system_prompt.txt
 ```
 
+## What this misses: context grows quadratically
+
+The prefix is a fixed cost per turn. The **conversation** is not — every turn
+resends the whole history, so total input across a run grows with the square of
+the turn count, not linearly with it.
+
+That was measured the expensive way. A 30-scenario run was estimated at $6 from
+a linear model and cost $17: 13-18 tool calls per incident rather than the 7
+assumed, each turn carrying everything before it, for about 88,000 input tokens
+per incident against an estimate of 20,000.
+
+Caching blunts this exactly where it matters -- the resent history is the part a
+prefix cache serves at a tenth of the price -- but the figures below are for one
+turn's prefix, and the saving on a long agent run is larger than they suggest
+while the absolute spend is larger still. Estimate a multi-turn agent from a
+measured run, never from a per-turn figure multiplied by turns.
+
 ## Measured in tokens, computed in dollars
 
 Every saving above is a ratio between two token counts taken with the same
