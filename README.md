@@ -111,6 +111,12 @@ in, per category and per scenario.
 
 No numbers are quoted here until a full sweep has been run and committed.
 
+A note on cost, since the estimate was wrong: an incident costs roughly **$0.58**
+on Opus 5, not the $0.19 first projected. Each turn resends the whole
+conversation, so input grows with the square of the turn count, and a real run
+makes 13-18 tool calls rather than the 7 assumed -- about 88,000 input tokens per
+incident. A full sweep is therefore around **$17**.
+
 ## Running it
 
 Requires Python 3.11+ and credentials for the Anthropic API.
