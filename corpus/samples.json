@@ -16,8 +16,7 @@
         "error",
         "never",
         "report",
-        "sweep",
-        "run"
+        "sweep"
       ]
     },
     {
@@ -36,8 +35,7 @@
         "error",
         "never",
         "report",
-        "sweep",
-        "run"
+        "sweep"
       ]
     },
     {
@@ -56,8 +54,7 @@
         "error",
         "never",
         "report",
-        "sweep",
-        "run"
+        "sweep"
       ]
     },
     {
@@ -91,9 +88,6 @@
       "fix_commit": "f857e9fc",
       "fix_diff": "diff --git a/src/ops_copilot/cli.py b/src/ops_copilot/cli.py\nindex bc11c9a..616a5d0 100644\n--- a/src/ops_copilot/cli.py\n+++ b/src/ops_copilot/cli.py\n@@ -11,17 +11,17 @@ from __future__ import annotations\n \n import argparse\n import asyncio\n import getpass\n import json\n import sys\n \n from . import approvals\n-from .agent import _cli_event, diagnose\n+from .agent import _cli_event, diagnose, summarise_error\n from .harness import HarnessAborted, run_harness\n from .scoring import score_run\n from .world import all_scenarios, load_scenario\n \n BOLD, DIM, GREEN, RED, YELLOW, RESET = (\n     \"\\033[1m\", \"\\033[2m\", \"\\033[32m\", \"\\033[31m\", \"\\033[33m\", \"\\033[0m\",\n )\n \n@@ -42,17 +42,22 @@ async def _run(args: argparse.Namespace) -> int:\n     scenario = load_scenario(args.scenario)\n     print(f\"{BOLD}{scenario.id}{RESET}  {scenario.title}\")\n     print(f\"{DIM}alert: {scenario.alert.get('name')} on \"\n           f\"{scenario.alert.get('service')} ({scenario.alert.get('severity')}){RESET}\\n\")\n \n     run = await diagnose(scenario.id, effort=args.effort, on_event=_cli_event)\n \n     if run.error:\n-        print(f\"{RED}error: {run.error}{RESET}\")\n+        print(f\"{RED}error: {summarise_error(run.error)}{RESET}\")\n+        if run.error_kind == \"billing\":\n+            print(f\"\\n{YELLOW}This is a credit/billing limit, not a wrong \"\n+                  f\"diagnosis.{RESET}\\n\"\n+                  f\"  Add credits, or raise the key's own spend limit if it has one.\\n\"\n+                  f\"  A full 30-scenario sweep needs roughly $6.\")\n         if run.error_kind == \"auth\":\n             print(f\"\\n{YELLOW}This is an authentication failure, not a wrong \"\n                   f\"diagnosis.{RESET}\\n\"\n                   f\"  export ANTHROPIC_API_KEY=sk-ant-...\\n\"\n                   f\"  key at https://console.anthropic.com/settings/keys\")\n \n     if run.proposal:\n         score = score_run(run, scenario)\n",
       "keywords": [
-        "treat",
-        "running",
-        "out",
         "credit",
         "systemic"
       ]
@@ -109,9 +103,6 @@
       "fix_commit": "f857e9fc",
       "fix_diff": "diff --git a/src/ops_copilot/harness.py b/src/ops_copilot/harness.py\nindex c5722a3..efddffe 100644\n--- a/src/ops_copilot/harness.py\n+++ b/src/ops_copilot/harness.py\n@@ -82,17 +82,17 @@ async def run_harness(\n     run_dir.mkdir(parents=True, exist_ok=True)\n \n     semaphore = asyncio.Semaphore(concurrency)\n \n     # Canary: prove one scenario can reach the API before committing to the\n     # other twenty-nine. An auth or model-id mistake fails the same way every\n     # time, and discovering it once is enough.\n     first = await _run_one(scenarios[0], semaphore, run_dir, effort, model, progress)\n-    if first[1].get(\"error_kind\") in {\"auth\", \"config\"}:\n+    if first[1].get(\"error_kind\") in {\"auth\", \"config\", \"billing\"}:\n         raise HarnessAborted(\n             f\"{scenarios[0].id} failed before reaching any tool, and the cause \"\n             f\"is not scenario-specific, so the sweep stopped after one instead \"\n             f\"of repeating it thirty times:\\n\\n  {first[1]['error']}\"\n         )\n \n     rest = await asyncio.gather(\n         *(\n",
       "keywords": [
-        "treat",
-        "running",
-        "out",
         "credit",
         "systemic"
       ]
@@ -131,8 +122,7 @@
         "provider",
         "error",
         "abort",
-        "message",
-        "too"
+        "message"
       ]
     },
     {
@@ -186,7 +176,6 @@
       "keywords": [
         "sweep",
         "result",
-        "most",
         "completed"
       ]
     },
@@ -203,7 +192,6 @@
       "keywords": [
         "sweep",
         "result",
-        "most",
         "completed"
       ]
     },
@@ -222,7 +210,6 @@
         "sweep",
         "progress",
         "long",
-        "run",
         "indistinguishable",
         "hung"
       ]
@@ -656,10 +643,8 @@
         "gate",
         "tests",
         "reflect",
-        "how",
         "pass",
         "score",
-        "actually",
         "interact"
       ]
     },
@@ -676,9 +661,7 @@
       "keywords": [
         "damages",
         "declare",
-        "which",
         "criteria",
-        "actually",
         "break"
       ]
     },

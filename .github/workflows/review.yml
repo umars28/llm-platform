@@ -1,0 +1,53 @@
+name: pr-review
+
+on:
+  pull_request:
+
+# Findings are advisory by default. A reviewer with an unmeasured false positive
+# rate must not be able to block a merge -- that is how teams learn to ignore it,
+# or disable it. Make it required only once its measured FPR justifies the
+# interruption.
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - run: uv venv --python 3.12
+      - run: uv pip install -e ".[dev]"
+
+      - name: diff of this pull request
+        run: |
+          git diff --unified=8 \
+            "origin/${{ github.base_ref }}...HEAD" -- '*.py' > pr.diff
+          wc -l pr.diff
+
+      - name: review
+        id: review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        continue-on-error: true
+        run: uv run pr-reviewer review pr.diff | tee findings.txt
+
+      - name: comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.existsSync('findings.txt')
+              ? fs.readFileSync('findings.txt', 'utf8').trim() : '';
+            if (!body) return;
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '### Automated review\n\n```\n' + body + '\n```\n\n' +
+                    '_Advisory. Measured recall and false-positive rate are in the README._',
+            });

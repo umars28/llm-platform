@@ -139,11 +139,20 @@ def _keywords(subject: str) -> list[str]:
     fix named; judging semantic equivalence would need a model, and a scorer
     that needs a model has the same trust problem as the reviewer it scores.
     """
+    # Generic verbs and connectives are dropped as well as articles. A correct
+    # finding phrased in its own words would otherwise be penalised for not
+    # reusing the fix author's vocabulary -- which measures wording rather than
+    # whether the same defect was identified.
     stop = {
         "fix", "the", "a", "an", "is", "are", "was", "were", "not", "no", "and",
         "or", "of", "to", "in", "on", "for", "with", "that", "than", "it", "its",
         "now", "so", "when", "only", "but", "as", "at", "by", "be", "from",
         "does", "do", "did", "this", "these", "those", "if", "into", "they",
+        "treat", "make", "makes", "use", "uses", "used", "run", "running", "runs",
+        "out", "more", "less", "also", "still", "even", "just", "very", "too",
+        "should", "must", "can", "may", "will", "would", "actually", "really",
+        "how", "what", "which", "where", "why", "own", "their", "them", "one",
+        "another", "other", "some", "any", "all", "both", "each", "most",
     }
     words = re.findall(r"[a-z_][a-z0-9_]{2,}", subject.lower())
     return [w for w in words if w not in stop]
