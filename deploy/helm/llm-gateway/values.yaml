@@ -2,14 +2,33 @@ replicaCount: 2
 
 image:
   repository: llm-gateway
-  tag: "0.1.0"
-  # Never in a local cluster: the image is built here and not in any registry,
-  # so Always would make every pod fail to pull.
+  tag: "0.2.0"
+  # Never Always in a local cluster: the image is built here and is in no
+  # registry, so Always would make every pod fail to pull.
   pullPolicy: IfNotPresent
 
 service:
   type: ClusterIP
   port: 8080
+
+logLevel: info
+
+shutdown:
+  # The window between SIGTERM and the pod leaving the Service's endpoints.
+  # Kubernetes does those concurrently rather than in order, so a pod that
+  # exits immediately drops requests that were already routed to it.
+  drainSeconds: 5
+  # How long to wait for work already running. LLM calls are long, and killing
+  # one wastes tokens the tenant has already been charged for.
+  graceSeconds: 30
+
+redis:
+  # Quota counters live here. Without a shared store each replica enforces the
+  # budget against its own arithmetic, so a tenant can spend its limit once per
+  # pod -- the chart refuses to render more than one replica without it.
+  enabled: true
+  url: ""
+  image: "redis:7.4-alpine"
 
 resources:
   # Memory request equals its limit; CPU has a request and deliberately no
@@ -27,14 +46,6 @@ resources:
     memory: 192Mi
   limits:
     memory: 192Mi
-
-redis:
-  # Quota counters live here. Without it each replica enforces the budget
-  # against its own arithmetic, so a tenant can spend its limit once per pod --
-  # the chart refuses to render more than one replica without it.
-  enabled: true
-  url: ""            # external Redis; leave blank to run the bundled one
-  image: redis:7.4-alpine
 
 autoscaling:
   enabled: true

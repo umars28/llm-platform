@@ -19,8 +19,10 @@ send traffic into a service that cannot serve it.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
+from typing import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,14 @@ from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from .metrics import Metrics
+from .observability import (
+    Lifecycle,
+    configure_logging,
+    extract_request_id,
+    log,
+    observed,
+    tenant_var,
+)
 from .policy import PolicyEngine
 from .pricing import estimate_usd, settle_usd
 from .routing import AllProvidersFailed, Router
@@ -61,11 +71,25 @@ def create_app(config: dict[str, Any] | None = None, upstream: Upstream | None =
         },
     )
 
-    app = FastAPI(title="llm-gateway", version="0.1.0")
+    logger = configure_logging()
+    lifecycle = Lifecycle()
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        log(logger, "info", "starting", shared_quota=policy.shared_state,
+            providers=[p.name for p in router.providers])
+        yield
+        # Runs on SIGTERM, before the process exits: readiness has already
+        # started failing, so this is the window for in-flight work to finish.
+        await lifecycle.drain(logger)
+
+    app = FastAPI(title="llm-gateway", version="0.2.0", lifespan=lifespan)
     app.state.policy = policy
     app.state.router = router
     app.state.metrics = metrics
     app.state.upstream = sender
+    app.state.lifecycle = lifecycle
+    app.state.logger = logger
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -77,6 +101,14 @@ def create_app(config: dict[str, Any] | None = None, upstream: Upstream | None =
         """Readiness: traffic can actually be served right now."""
         healthy = [p.name for p in router.providers if p.healthy]
         quota_ok = policy.store.healthy()
+        # Fail readiness the moment SIGTERM arrives, so the pod leaves the
+        # Service's endpoints while it still has time to finish what it has.
+        if lifecycle.shutting_down:
+            return JSONResponse(
+                {"ready": False, "reason": "shutting down",
+                 "in_flight": lifecycle.in_flight},
+                status_code=503,
+            )
         # Quota state is part of readiness. With a shared store unreachable,
         # budgets fail closed, so serving traffic would mean refusing every
         # request -- better to leave the rotation than to answer 402 to everyone.
@@ -110,6 +142,7 @@ def create_app(config: dict[str, Any] | None = None, upstream: Upstream | None =
         authorization: str | None = Header(default=None),
     ) -> JSONResponse:
         started = time.perf_counter()
+        request_id = extract_request_id(request.headers)
         key = x_api_key or (authorization or "").removeprefix("Bearer ").strip() or None
 
         # A malformed body is the caller's mistake and must not look like ours.
@@ -141,9 +174,13 @@ def create_app(config: dict[str, Any] | None = None, upstream: Upstream | None =
         estimated = estimate_usd(model, payload)
         decision, tenant = policy.admit(key, model, estimated)
         tenant_name = tenant.name if tenant else "unknown"
+        tenant_var.set(tenant_name)
 
         if not decision.allowed:
-            metrics.denied(tenant_name, model, decision.denial.value if decision.denial else "?")
+            reason = decision.denial.value if decision.denial else "?"
+            metrics.denied(tenant_name, model, reason)
+            log(logger, "info", "denied", request_id=request_id, tenant=tenant_name,
+                model=model, reason=reason, status=decision.status_code)
             headers = (
                 {"retry-after": str(max(1, int(decision.retry_after_s or 1)))}
                 if decision.retry_after_s
@@ -151,31 +188,44 @@ def create_app(config: dict[str, Any] | None = None, upstream: Upstream | None =
             )
             return JSONResponse(
                 {"type": "error", "error": {
-                    "type": decision.denial.value if decision.denial else "denied",
-                    "message": decision.reason}},
+                    "type": reason, "message": decision.reason}},
                 status_code=decision.status_code,
-                headers=headers,
+                headers={**(headers or {}), "x-request-id": request_id},
             )
 
         settled = 0.0
+        lifecycle.enter()
         try:
             result = await sender.send(model, payload)
         except AllProvidersFailed as exc:
             metrics.upstream_failed(tenant_name, model)
+            log(logger, "error", "upstream unavailable", request_id=request_id,
+                tenant=tenant_name, model=model,
+                attempts=[{"provider": n, "why": w} for n, w in exc.attempts])
             return JSONResponse(
                 {"type": "error", "error": {
                     "type": "upstream_unavailable", "message": str(exc),
                     "attempts": [{"provider": n, "why": w} for n, w in exc.attempts]}},
                 status_code=503,
+                headers={"x-request-id": request_id},
             )
         else:
             settled = settle_usd(model, result.usage)
+            duration = time.perf_counter() - started
             metrics.served(
                 tenant_name, model, result.provider, result.status,
-                (time.perf_counter() - started), settled, result.usage,
+                duration, settled, result.usage,
             )
-            return JSONResponse(result.body, status_code=result.status)
+            log(logger, "info", "served", request_id=request_id, tenant=tenant_name,
+                model=model, provider=result.provider, status=result.status,
+                duration_ms=round(duration * 1000, 1), cost_usd=round(settled, 6),
+                **result.usage)
+            return JSONResponse(
+                result.body, status_code=result.status,
+                headers={"x-request-id": request_id},
+            )
         finally:
+            lifecycle.leave()
             # In a finally so a crash cannot leak the reservation. A leak here
             # looks like a tenant slowly losing quota for no reason.
             if tenant is not None:

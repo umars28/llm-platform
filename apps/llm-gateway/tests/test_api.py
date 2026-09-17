@@ -243,3 +243,39 @@ def test_readiness_fails_when_the_quota_store_is_unreachable():
     r = TestClient(app).get("/readyz")
     assert r.status_code == 503
     assert r.json()["quota_store"]["healthy"] is False
+
+
+# -- request identity end to end ---------------------------------------
+
+def test_the_response_carries_the_request_id_back():
+    c = client(FakeUpstream(ok_result()))
+    r = c.post("/v1/messages", headers={"x-api-key": "k-plat", "x-request-id": "trace-42"},
+               json={"model": "claude-opus-5", "max_tokens": 8, "messages": []})
+    assert r.headers["x-request-id"] == "trace-42"
+
+
+def test_a_denial_also_carries_the_request_id():
+    """Otherwise the one response a tenant complains about is the untraceable one."""
+    c = client(FakeUpstream(ok_result()))
+    r = c.post("/v1/messages", headers={"x-api-key": "nope", "x-request-id": "trace-9"},
+               json={"model": "claude-opus-5", "max_tokens": 8, "messages": []})
+    assert r.status_code == 401
+    assert r.headers["x-request-id"] == "trace-9"
+
+
+def test_readiness_fails_as_soon_as_shutdown_begins():
+    """The pod must leave the Service while it still has time to finish work."""
+    app = create_app(CONFIG, FakeUpstream(ok_result()))
+    c = TestClient(app)
+    assert c.get("/readyz").status_code == 200
+    app.state.lifecycle.shutting_down = True
+    r = c.get("/readyz")
+    assert r.status_code == 503
+    assert r.json()["reason"] == "shutting down"
+
+
+def test_liveness_still_passes_while_draining():
+    """Killing a draining pod is how in-flight requests get dropped."""
+    app = create_app(CONFIG, FakeUpstream(ok_result()))
+    app.state.lifecycle.shutting_down = True
+    assert TestClient(app).get("/healthz").status_code == 200

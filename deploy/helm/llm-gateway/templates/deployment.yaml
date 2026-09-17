@@ -18,6 +18,9 @@ spec:
         # is applied to new pods only, so the fleet silently runs two policies.
         checksum/config: {{ .Files.Get "files/gateway.yaml" | sha256sum }}
     spec:
+      # Must exceed drain + grace, or the kubelet kills the pod mid-drain and
+      # the graceful shutdown is decorative.
+      terminationGracePeriodSeconds: {{ add .Values.shutdown.drainSeconds .Values.shutdown.graceSeconds 10 }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -40,6 +43,12 @@ spec:
           env:
             - name: GATEWAY_CONFIG
               value: /etc/llm-gateway/gateway.yaml
+            - name: SHUTDOWN_DRAIN_SECONDS
+              value: {{ .Values.shutdown.drainSeconds | quote }}
+            - name: SHUTDOWN_GRACE_SECONDS
+              value: {{ .Values.shutdown.graceSeconds | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
             {{- if or .Values.redis.enabled .Values.redis.url }}
             - name: GATEWAY_REDIS_URL
               value: {{ .Values.redis.url | default (printf "redis://%s-redis:6379/0" (include "llm-gateway.fullname" .)) | quote }}
