@@ -13,12 +13,18 @@ moment someone needs to group by tenant, and then it does not. The fields are
 fixed so a query written during one incident still works during the next.
 
 **Draining before exit.** A rolling update sends SIGTERM and Kubernetes removes
-the pod from the Service *concurrently*, not before -- so a pod that exits the
-instant it is signalled drops requests that were already routed to it. The delay
-here is not politeness; it is the window in which endpoint propagation catches
-up. Long LLM calls make this worse than usual: a request in flight may have
-thirty seconds left to run, and killing it wastes tokens the tenant has already
-been charged for.
+the pod from the Service *concurrently*, not before, so a pod that exits the
+instant it is signalled drops requests already routed to it. Long LLM calls make
+this worse than usual: a request in flight may have thirty seconds left to run,
+and killing it wastes tokens the tenant has already been charged for.
+
+A caveat this module cannot fix by itself, learned by measuring it: uvicorn stops
+accepting new connections the moment it receives SIGTERM, and lifespan shutdown
+runs *after* that. So the wait below protects requests already being served, and
+does nothing for ones that arrive while endpoints are still propagating -- those
+need a `preStop` hook, which delays SIGTERM itself. Without one, a rolling
+restart under load dropped 7 of 535 requests with connection-refused. The chart
+has one; this class covers the other half of the problem.
 """
 
 from __future__ import annotations

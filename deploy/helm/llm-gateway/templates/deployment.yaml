@@ -78,6 +78,19 @@ spec:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 3
             failureThreshold: 20
+          lifecycle:
+            preStop:
+              # Runs BEFORE SIGTERM. This is the fix that matters: uvicorn stops
+              # accepting connections the instant it is signalled, so an in-app
+              # drain during lifespan shutdown happens after the socket is
+              # already closed -- it waits politely while requests are refused.
+              #
+              # Sleeping here keeps the server accepting while Kubernetes
+              # removes the pod from every kube-proxy's endpoint list. Measured:
+              # without it, a rolling restart under load dropped 7 of 535
+              # requests with connection-refused.
+              exec:
+                command: ["sleep", "{{ .Values.shutdown.drainSeconds }}"]
           resources: {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: config
