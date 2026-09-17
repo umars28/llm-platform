@@ -140,6 +140,9 @@ Enforced at plan or render time, before anything reaches a cluster:
   budget.
 - Helm refuses to render more than one replica without a shared quota store,
   with a message explaining the consequence.
+- The network policy renders unless it is *explicitly* disabled, so a
+  `helm upgrade --reuse-values` replaying values that predate it cannot
+  silently delete the only thing in front of an unauthenticated Redis.
 - `terminationGracePeriodSeconds` is computed from the drain and grace windows,
   so it cannot silently fall below them.
 - `helm_release` is `atomic` — this rolled back a release whose image was missing

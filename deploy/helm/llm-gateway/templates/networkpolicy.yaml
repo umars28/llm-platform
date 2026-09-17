@@ -1,4 +1,12 @@
-{{- if .Values.networkPolicy.enabled }}
+{{- /*
+  Rendered unless networkPolicy.enabled is explicitly false. Two reasons for
+  the double negative: `helm upgrade --reuse-values` replays an older release's
+  values, where this key does not exist, and a plain `.enabled` test nil-panics
+  on it. Defaulting the absent case to *off* would be worse than the panic --
+  the upgrade would succeed and quietly delete the policies protecting a Redis
+  that has no password. A security control fails on, the way budgets do.
+*/ -}}
+{{- if ne (.Values.networkPolicy).enabled false }}
 # Default-deny for both pods, then the traffic each one actually needs.
 #
 # The quota store is the reason this matters most. Without a policy, any pod in
@@ -21,7 +29,7 @@ spec:
     # nothing outside reaches a service holding provider credentials.
     - from:
         - podSelector: {}
-        {{- range .Values.networkPolicy.allowedNamespaces }}
+        {{- range (.Values.networkPolicy).allowedNamespaces }}
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ . }}

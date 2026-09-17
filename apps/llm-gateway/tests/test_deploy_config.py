@@ -159,3 +159,14 @@ def test_dns_is_allowed_or_every_rule_below_it_is_dead():
     """Every other egress rule resolves a name first."""
     text = netpol_text()
     assert text.count("port: 53") == 4  # udp+tcp, for both pods
+
+
+def test_the_policy_renders_when_its_values_key_is_missing():
+    """`helm upgrade --reuse-values` replays values that predate this key.
+
+    Treating the absent case as "off" would let that upgrade succeed and delete
+    the policies in front of an unauthenticated Redis. The control fails on.
+    """
+    text = netpol_text()
+    assert "ne (.Values.networkPolicy).enabled false" in text
+    assert ".Values.networkPolicy.enabled }}" not in text
