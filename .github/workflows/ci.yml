@@ -1,0 +1,153 @@
+name: ci
+
+# At the repository root, because GitHub only reads .github/workflows/ from
+# here. The two workflows carried in by the subtree merge sat under packages/
+# and apps/ and had never run once -- a workflow file in a subdirectory is a
+# YAML file, not CI.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A newer push supersedes an in-flight run on the same ref, so a busy branch
+  # does not queue runs that are obsolete before they start.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test ${{ matrix.project }}
+    runs-on: ubuntu-latest
+    strategy:
+      # One red project must not hide the state of the other seven.
+      fail-fast: false
+      matrix:
+        project:
+          - apps/llm-gateway
+          - apps/ops-copilot
+          - apps/pr-reviewer
+          - apps/runbook-rag
+          - packages/agent-guardrail
+          - packages/llm-eval-harness
+          - packages/llm-token-optimizer
+          - packages/llm-tracing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: install
+        working-directory: ${{ matrix.project }}
+        run: |
+          uv venv --python 3.12
+          uv pip install -e ".[dev]"
+
+      - name: test
+        working-directory: ${{ matrix.project }}
+        # `not slow` excludes suites that download model weights; the models job
+        # runs them instead. The exclusion is a scheduling decision rather than
+        # a quiet reduction in coverage.
+        run: uv run pytest -q -m "not slow"
+
+  models:
+    # Model-backed suites, separated because they pull hundreds of megabytes.
+    # Advisory: the matrix above already blocks anything decidable without them.
+    name: model-backed tests
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: cache model weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-v1
+      - name: agent-guardrail
+        working-directory: packages/agent-guardrail
+        run: |
+          uv venv --python 3.12
+          uv pip install -e ".[dev]"
+          uv run pytest -q
+
+  deploy-config:
+    name: charts, terraform and alert rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+      - name: helm lint and render
+        run: |
+          helm lint deploy/helm/llm-gateway
+          helm template gw deploy/helm/llm-gateway --set serviceMonitor.enabled=true > /dev/null
+
+      - name: the chart refuses an unsafe configuration
+        # Asserting that a guard fires is the only way to know it still does.
+        # A guard that quietly stopped working looks exactly like one that
+        # never fires.
+        run: |
+          if helm template gw deploy/helm/llm-gateway \
+               --set redis.enabled=false --set autoscaling.minReplicas=2 >/dev/null 2>&1; then
+            echo "::error::chart rendered two replicas without a shared quota store"
+            exit 1
+          fi
+          echo "guard held: refused two replicas without shared quota state"
+
+      - uses: opentofu/setup-opentofu@v1
+      - name: terraform validate
+        working-directory: deploy/terraform
+        run: |
+          tofu init -backend=false
+          tofu fmt -check -recursive
+          tofu validate
+
+      - name: alert rules parse
+        # A rule file with a syntax error loads silently and never fires, so
+        # this is the difference between having alerts and believing you do.
+        run: |
+          python3 - <<'PY'
+          import pathlib, yaml
+          src = yaml.safe_load(
+              pathlib.Path("deploy/helm/llm-gateway/files/alerts.yaml").read_text()
+          )
+          pathlib.Path("rules.yaml").write_text(yaml.safe_dump(src, sort_keys=False))
+          PY
+          docker run --rm -v "$PWD/rules.yaml:/rules.yaml:ro" \
+            --entrypoint promtool prom/prometheus:v3.1.0 check rules /rules.yaml
+
+  image:
+    name: build and scan image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build
+        run: docker build -t llm-gateway:ci apps/llm-gateway
+
+      - name: the image runs as a non-root user
+        run: |
+          uid=$(docker run --rm --entrypoint id llm-gateway:ci -u)
+          [ "$uid" != "0" ] || { echo "::error::image runs as root"; exit 1; }
+          echo "runs as uid $uid"
+
+      - name: trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: llm-gateway:ci
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          # Fail only on what can be acted on. Failing a build for a CRITICAL
+          # with no fix available teaches people to ignore the scanner.
+          severity: HIGH,CRITICAL
+          vuln-type: os,library
