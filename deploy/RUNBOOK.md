@@ -13,7 +13,7 @@ NS=llm-platform
 
 kubectl get pod -n $NS
 kubectl exec -n $NS deploy/gw-llm-gateway -- \
-  wget -qO- localhost:8080/readyz | jq
+  python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8080/readyz').read().decode())" | jq
 ```
 
 `/readyz` answers most of the first questions at once: which providers are
@@ -30,7 +30,8 @@ kubectl logs -n $NS -l app.kubernetes.io/name=llm-gateway --tail=500 \
   | jq -c 'select(.tenant == "platform")'
 
 # Spend and budget, per tenant
-kubectl exec -n $NS deploy/gw-llm-gateway -- wget -qO- localhost:8080/v1/usage | jq
+kubectl exec -n $NS deploy/gw-llm-gateway -- \
+  python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8080/v1/usage').read().decode())" | jq
 ```
 
 ---
@@ -72,7 +73,7 @@ before touching anything:
 
 ```bash
 kubectl exec -n $NS deploy/gw-llm-gateway -- \
-  wget -qO- localhost:8080/readyz | jq '.providers'
+  python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8080/readyz').read().decode())" | jq '.providers'
 ```
 
 `mean_latency_ms` is per provider. If one is slow and the other is not, lower its
@@ -162,7 +163,8 @@ Not an outage. One team is at 90% of its monthly budget and will start getting
 402s before the window resets.
 
 ```bash
-kubectl exec -n $NS deploy/gw-llm-gateway -- wget -qO- localhost:8080/v1/usage | jq '.tenants'
+kubectl exec -n $NS deploy/gw-llm-gateway -- \
+  python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8080/v1/usage').read().decode())" | jq '.tenants'
 ```
 
 Tell them before it fails, not after. If the increase is expected, raise
@@ -177,6 +179,11 @@ the pod template carries a checksum of the config.
 `terminationGracePeriodSeconds`, covering the preStop delay plus the drain
 window. Without it a rolling restart dropped 7 of 535 requests; with it, 0 of
 670. Shortening it to make rollouts feel faster re-breaks that.
+
+**A new pod in the namespace cannot reach Redis.** That is the network policy,
+not a fault. Only the gateway may open 6379; anything else gets connection
+refused. If the *gateway* cannot reach it, that is
+[quota-store-down](#quota-store-down), not this.
 
 **A breaker showing `half_open`.** It is probing a provider that failed earlier.
 This is recovery in progress, not a fault.

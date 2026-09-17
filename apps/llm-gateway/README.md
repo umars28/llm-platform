@@ -13,7 +13,8 @@ gw-llm-gateway-5d7b9f69f9-r5wlm         1/1  Running
 gw-llm-gateway-5d7b9f69f9-xxzkw         1/1  Running
 gw-llm-gateway-redis-557765fcfb-fn75t   1/1  Running
 
-$ kubectl exec -n llm-platform deploy/gw-llm-gateway -- wget -qO- localhost:8080/readyz
+$ kubectl exec -n llm-platform deploy/gw-llm-gateway -- \
+    python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8080/readyz').read().decode())"
 {"ready":true,"healthy_providers":["anthropic","openrouter"],
  "quota_store":{"shared":true,"healthy":true}, ...}
 ```
@@ -28,11 +29,12 @@ running cluster. Two of them failed the first time.
 | Quota holds across replicas | 40 concurrent requests, tenant burst 10 | **exactly 10 admitted, 30 refused** |
 | Rolling update drops nothing | ~670 requests during a rollout | **0 failed** (was 7 of 535) |
 | Credentials stay out of state | grep the state file | **0 plaintext, 0 base64** |
+| Redis reachable only by the gateway | an unrelated pod, before and after the policy | **PONG → connection refused** |
 
 Each number came from a command, and each command is in this README or the
 [runbook](../../deploy/RUNBOOK.md).
 
-## Three bugs the measurements found
+## Four bugs the measurements found
 
 **Per-replica budgets.** Quota counters lived in process memory, so each pod
 enforced the limit against its own arithmetic. A tenant with a $200 budget could
@@ -49,6 +51,13 @@ SIGTERM and lifespan shutdown runs *after* that — five seconds spent waiting
 politely while requests were refused. Unit tests passed; a rolling restart under
 load dropped 7 of 535. The fix is a `preStop` hook, which delays SIGTERM itself.
 The in-app drain still covers the other half: requests already being served.
+
+**A runbook whose first command could not run.** Orientation in the runbook
+began with `kubectl exec ... wget -qO- localhost:8080/readyz`. The image is
+`python:3.12-slim`, which does not ship wget, so the first step anyone takes
+after being paged failed with `executable file not found`. It was never caught
+because the property it documents was always checked some other way. The
+commands now use the interpreter the entrypoint already depends on.
 
 **A data source is not a safe way to read a secret.** Provider credentials were
 moved from a `kubernetes_secret` resource to a `data` block, on the assumption
@@ -173,3 +182,11 @@ Stated here rather than discovered at 3am, and repeated in the runbook:
 - **No ingress, deliberately.** A service holding provider credentials should not
   be reachable from outside the cluster without a decision about who may reach
   it.
+
+- **The network policy is namespace-wide, not per-caller.** Any pod in this
+  namespace may call the gateway; the policy distinguishes namespaces, not
+  workloads. Restricting it further needs a decision about which services are
+  allowed to spend a tenant's budget, which is an authorization question the
+  gateway does not currently answer.
+- **Redis still has no password.** The policy is now the only thing in front of
+  it. That is a real improvement over nothing, and it is not authentication.
