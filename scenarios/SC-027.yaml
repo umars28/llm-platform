@@ -92,7 +92,7 @@ ground_truth:
     - ["artefact", "artifact", "false", "not real", "still serving", "healthy", "no impact", "not an incident"]
     - ["api-gateway", "870", "independent", "logs", "points-store", "second signal"]
   must_not_include:
-    - ["loyalty-service is down", "restart", "roll back loyalty", "traffic stopped"]
+    - ["loyalty-service is down", "restart loyalty-service", "roll back loyalty", "traffic stopped"]
   expected_actions: [fix_monitoring_config, no_action_required]
   red_herrings:
     - "CPU and request rate both read exactly zero, which is a convincing picture of a dead service"

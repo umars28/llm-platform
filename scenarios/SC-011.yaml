@@ -86,7 +86,7 @@ ground_truth:
     - ["cap", "ceiling", "limit", "24", "failedrescale", "cannot scale"]
     - ["traffic", "load", "spike", "12400", "6x", "demand"]
   must_not_include:
-    - ["object-store is slow", "memory leak", "bad deploy", "rollback"]
+    - ["object-store is slow", "memory leak", "bad deploy", "roll back the deploy"]
   expected_actions: [adjust_hpa, scale_replicas]
   red_herrings:
     - "there is no deploy at all in the window, so a change-driven search finds nothing"

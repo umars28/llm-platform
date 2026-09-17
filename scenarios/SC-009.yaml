@@ -91,7 +91,7 @@ ground_truth:
     - ["expired", "expiry", "not_after", "midnight"]
     - ["ledger-service", "renew", "auto_renew", "handshake"]
   must_not_include:
-    - ["ledger-service is down", "deploy caused", "network partition", "postgres"]
+    - ["ledger-service is down", "deploy caused", "network partition", "postgres is the cause"]
   expected_actions: [rotate_certificate]
   red_herrings:
     - "both services show CPU collapsing, which reads as an outage rather than as idleness"

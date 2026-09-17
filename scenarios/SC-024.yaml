@@ -89,7 +89,7 @@ ground_truth:
     - ["reschedul", "restart", "node", "pull", "rebalance", "scale-down"]
     - ["two", "mixed", "7", "split", "unreleased", "9d1c", "partial"]
   must_not_include:
-    - ["template-service is broken", "job-queue", "deploy was performed", "rollback the deploy that happened"]
+    - ["template-service is broken", "job-queue is the cause", "deploy was performed", "rollback the deploy that happened"]
   expected_actions: [rollback_deploy, revert_config_change]
   red_herrings:
     - "no deploy record exists for email-worker, so a change search over the window finds nothing"

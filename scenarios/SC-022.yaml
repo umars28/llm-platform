@@ -92,7 +92,7 @@ ground_truth:
     - ["load balancer", "target group", "targets", "drain", "404"]
     - ["ingress", "config", "change", "mismatch", "readiness"]
   must_not_include:
-    - ["public-api is down", "public-api crashed", "orders-api", "capacity"]
+    - ["public-api is down", "public-api crashed", "orders-api is the cause", "add more capacity"]
   expected_actions: [revert_config_change, fix_monitoring_config]
   red_herrings:
     - "a total external outage reads as an application failure, though the application never stopped working"

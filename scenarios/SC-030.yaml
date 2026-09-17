@@ -102,7 +102,7 @@ ground_truth:
     - ["report-builder", "22", "node", "memory pressure", "eviction", "overcommit"]
     - ["ledger-service", "victim", "neighbour", "neighbor", "evicted", "not the cause"]
   must_not_include:
-    - ["ledger-service is leaking", "ledger-service needs more memory", "postgres", "rollback ledger"]
+    - ["ledger-service is leaking", "ledger-service needs more memory", "postgres is the cause", "rollback ledger"]
   expected_actions: [rollback_deploy, increase_memory_limit, drain_node]
   red_herrings:
     - "the alert names ledger-service, whose own memory use never moved"

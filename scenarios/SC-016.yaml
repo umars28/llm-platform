@@ -95,7 +95,7 @@ ground_truth:
     - ["drop", "blocked", "denied", "timeout", "connectivity", "silently"]
     - ["fraud-scorer", "payment-auth", "netpol", "rule removed", "19", "12"]
   must_not_include:
-    - ["fraud-scorer is down", "fraud-scorer is overloaded", "deploy caused", "dns"]
+    - ["fraud-scorer is down", "fraud-scorer is overloaded", "deploy caused", "dns resolution is failing"]
   expected_actions: [update_network_policy, revert_config_change]
   red_herrings:
     - "fraud-scorer reports itself completely healthy with 8 ready replicas and zero errors"

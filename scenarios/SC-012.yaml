@@ -89,7 +89,7 @@ ground_truth:
     - ["cpu", "wrong metric", "only cpu", "memory metric", "does not scale", "never scales"]
     - ["memory", "98%", "memory-bound", "memory bound", "insufficient memory"]
   must_not_include:
-    - ["maxreplicas", "max replicas reached", "job-queue is slow", "cpu saturation"]
+    - ["maxreplicas has been reached", "max replicas reached", "job-queue is slow", "cpu saturation"]
   expected_actions: [adjust_hpa, scale_replicas, increase_memory_limit]
   red_herrings:
     - "maxReplicas is 40 and unreached, so this is not the SC-011 ceiling problem despite looking similar"

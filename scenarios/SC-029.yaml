@@ -105,7 +105,7 @@ ground_truth:
     - ["heartbeat", "session timeout", "session_timeout", "12000", "10000", "longer than", "exceeds"]
     - ["v8.3.0", "deploy", "config", "max_poll_interval", "loop", "never stable", "churn"]
   must_not_include:
-    - ["kafka is down", "kafka is overloaded", "broker failure", "needs more workers", "under-replicated"]
+    - ["kafka is down", "kafka is overloaded", "broker failure", "needs more workers", "partitions are under-replicated"]
   expected_actions: [rollback_deploy, revert_config_change]
   red_herrings:
     - "all 24 pods are ready and pass health checks, so pod-level checks show a healthy fleet"

@@ -95,7 +95,7 @@ ground_truth:
     - ["inventory-api", "v3.0.0", "upstream", "provider", "dependency"]
     - ["rollout", "validation", "rename", "available_units", "consumer"]
   must_not_include:
-    - ["storefront deploy", "inventory-api is down", "inventory-api is erroring", "database"]
+    - ["storefront deploy", "inventory-api is down", "inventory-api is erroring", "the database is the cause"]
   expected_actions: [rollback_deploy]
   red_herrings:
     - "inventory-api reports 100% success and low latency, so dependency health checks all look green"

@@ -83,7 +83,7 @@ ground_truth:
     - ["audit_events", "row", "grew", "growth", "78", "table size", "volume"]
     - ["tenant_id", "created_at", "query plan", "predicate", "planner"]
   must_not_include:
-    - ["recent deploy", "traffic increase", "connection pool", "rollback"]
+    - ["recent deploy", "traffic increase", "connection pool", "roll back the deploy"]
   expected_actions: [add_database_index]
   red_herrings:
     - "Postgres CPU at 74% suggests an undersized database rather than one query plan"

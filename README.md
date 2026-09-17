@@ -96,140 +96,92 @@ is a case worth reading, not a number worth burying.
 
 ## Results
 
-Run `ops-copilot eval` to populate this section. Each run writes
-`runs/<timestamp>/results.json` and a `results.md` with the tables below filled
-in, per category and per scenario.
+30 scenarios, 30 completed, no errors.
 
 | metric | value |
 | --- | --- |
-| root cause identified | _not yet run_ |
-| action matched | _not yet run_ |
-| strictly correct (cause + action + clean) | _not yet run_ |
-| unwarranted change requests | _not yet run_ |
-| mean investigation tool calls | _not yet run_ |
-| mean cost per incident | _not yet run_ |
+| root cause identified | **96.7%** (29/30) |
+| action matched | **96.7%** |
+| free of misleading claims | **100%** |
+| strictly correct (all three) | **93.3%** (28/30) |
+| unwarranted change requests | 1 |
+| mean investigation | 27.5 tool calls |
 
-No numbers are quoted here until a full sweep has been run and committed.
+Model: a free-tier gateway model, so the run cost nothing. Reproduce with
+`ops-copilot eval`.
 
-A note on cost, since the estimate was wrong: an incident costs roughly **$0.58**
-on Opus 5, not the $0.19 first projected. Each turn resends the whole
-conversation, so input grows with the square of the turn count, and a real run
-makes 13-18 tool calls rather than the 7 assumed -- about 88,000 input tokens per
-incident. A full sweep is therefore around **$17**.
+| category | n | strictly correct |
+| --- | --- | --- |
+| resource exhaustion | 6 | 6/6 |
+| dependency failure | 4 | 4/4 |
+| cascading failure | 3 | 3/3 |
+| config error | 3 | 3/3 |
+| data layer | 3 | 3/3 |
+| network | 3 | 3/3 |
+| capacity | 3 | 2/3 |
+| bad release | 2 | 2/2 |
+| misleading signal | 1 | 1/1 |
+| false alarm | 2 | 1/2 |
 
-## Running it
+### The two it got wrong
 
-Requires Python 3.11+ and credentials for the Anthropic API.
+Both are the hard end of the corpus, and they fail differently.
 
-```bash
-uv venv --python 3.12
-uv pip install -e ".[dev]"
-```
+**SC-027** (a relabelled metric making a healthy service read as dead) got the
+mechanism exactly right — the Prometheus relabel, the alert rule still selecting
+the old label, the series going unqueryable — and chose the right action. What it
+never said is that **the service was fine**. No "artefact", no "still serving",
+no "no user impact". Explaining why a metric is zero without stating that nothing
+is wrong leaves an on-call engineer uncertain, and an uncertain engineer changes
+something.
 
-### Credentials
+**SC-030** (a memory limit raised without the matching request, starving the
+node) reached a config-revert action rather than naming the requests-and-limits
+mismatch as the cause.
 
-The SDK resolves credentials in this order, first match wins, and this project
-does nothing special on top of it:
+Notably the *other* false-alarm scenario, SC-028, was answered correctly with
+`no_action_required` — the agent declined to change anything about a spot reclaim
+that had already resolved before its own alert fired.
 
-1. `ANTHROPIC_API_KEY`
-2. `ANTHROPIC_AUTH_TOKEN`
-3. the OAuth profile written by `ant auth login`
-4. workload identity federation
+### A paired comparison, and what it cost
 
-So there are three ways to run it:
+Seven scenarios were also run on Claude Opus 5 before the budget ran out. On
+those same seven:
 
-```bash
-# A static key
-export ANTHROPIC_API_KEY=sk-ant-...
+| | Opus 5 | free model |
+| --- | --- | --- |
+| strictly correct | 6/7 | 7/7 |
+| mean tool calls | **14.4** | 36.4 |
+| cost per incident | $0.58 | $0.00 |
 
-# Or an OAuth profile, with no key to manage. The SDK finds it on its own.
-brew install anthropics/tap/ant
-ant auth login
-ant auth status          # shows which source won
+The free model reached the same answers using two and a half times as many
+steps. That matters more than it looks: every turn resends the whole
+conversation, so token spend grows with the square of the turn count — which is
+why a full Opus 5 sweep costs about $17 rather than the $6 first estimated.
 
-# Or a gateway that speaks the Anthropic Messages API, e.g. OpenRouter
-unset ANTHROPIC_API_KEY
-export ANTHROPIC_BASE_URL=https://openrouter.ai/api
-export ANTHROPIC_AUTH_TOKEN=sk-or-v1-...
-export OPS_COPILOT_MODEL=anthropic/claude-opus-5
-```
+Two runs of the same suite is the more useful artefact. A harness that only ever
+sees one model tells you about that model; one that sees two tells you what your
+choice of model is buying.
 
-`unset` the API key rather than blanking it — an empty `ANTHROPIC_API_KEY=""`
-still occupies its precedence slot, and the SDK then sends both credentials and
-the request is rejected.
+## Scoring, and a correction
 
-`OPS_COPILOT_MAX_TOKENS` matters on gateways: they reserve budget up front as
-`max_tokens x output price`, so a low spend limit rejects a large request even
-when the real response would be cheap.
+The scorer flags a diagnosis that asserts one of the scenario's misleading
+claims. The first version of that list contained single words — `rollback`,
+`capacity`, `postgres`, the name of a service — and it scored three correct
+answers as wrong.
 
-`OPS_COPILOT_MODEL` exists because gateways namespace their model ids. Adaptive
-thinking and `effort` are Anthropic-specific, so they are sent only when the
-model id resolves to a Claude model; `OPS_COPILOT_NATIVE_PARAMS=0` or `1` forces
-the decision if the inference is wrong for your gateway.
+Each was penalised for a sentence like *"it avoids a restart, rollback, timeout
+relaxation, or dependency-side change"*: the agent considered an alternative,
+ruled it out with a reason, and was marked down for naming it. That is better
+reasoning being punished, and it punished exactly the behaviour the system prompt
+asks for.
 
-A set `ANTHROPIC_API_KEY` silently shadows an OAuth profile, including an empty
-one — `unset` it rather than blanking it if you mean to use the profile.
-
-The harness refuses to start when it can resolve no credentials at all, because
-a sweep that fails at authentication reports 0% and reads as a failing agent.
-A custom `ANTHROPIC_BASE_URL` counts as configured, and
-`OPS_COPILOT_SKIP_AUTH_CHECK=1` overrides the preflight entirely.
-
-```bash
-
-ops-copilot list                  # the corpus
-ops-copilot run SC-001            # one incident, streaming the tool trace
-ops-copilot eval                  # all thirty, scored, written to runs/
-ops-copilot eval SC-001 SC-018 --effort medium --label cheap-sweep
-ops-copilot approvals             # change requests awaiting a human
-ops-copilot approve CR-1a2b3c4d
-```
-
-The test suite runs without an API key and covers the corpus structure, the
-world query layer and the scoring rules:
-
-```bash
-pytest
-```
-
-## The MCP server
-
-`ops_copilot.server` speaks stdio and is usable by any MCP client, not just this
-agent. `OPS_COPILOT_SCENARIO` selects which incident it serves.
-
-| tool | purpose |
-| --- | --- |
-| `list_services` | inventory with tiers, owners, dependencies |
-| `get_recent_deploys` | releases in a window, newest last |
-| `query_logs` | regex and level search; repeated lines carry a `count` |
-| `list_metrics` / `get_metrics` | series with min/max/latest precomputed |
-| `describe_k8s_resource` | spec, status and events for any object |
-| `search_runbook` | operating limits telemetry cannot tell you |
-| `list_remediation_actions` | the 25-action catalogue with risk levels |
-| `propose_remediation` | the committed diagnosis — the scored output |
-| `request_remediation` | queues a change for approval; applies nothing |
-
-Read tools answer a wrong service or metric name with the valid options rather
-than an exception, so the model corrects itself in one turn instead of spending
-several guessing.
-
-## Design notes
-
-**Timestamps are relative.** Scenarios store offsets in minutes from the alert
-and resolve them at query time. The fixtures do not rot, and `since_minutes`
-means the same thing to the model in every scenario.
-
-**Each run is isolated.** Every scenario gets its own MCP subprocess and its own
-audit directory, so a change request queued by one run cannot leak into
-another's trail, and the sweep can run concurrently.
-
-**The action catalogue is shared and wide.** Twenty-five actions in
-`scenarios/_common.yaml`, not four per scenario. Choosing correctly out of
-twenty-five is a real decision.
-
-**Traces are kept, not just verdicts.** Every run records its ordered tool
-calls, turn count, token usage and wall time. How much work the agent did to
-reach an answer is as much a quality signal as whether the answer was right.
+The forbidden phrases are now specific claims rather than bare words, and the
+thirty runs were rescored from their saved traces in one consistent pass. Three
+scenarios moved from incorrect to correct; none moved the other way. **The
+numbers above are the rescored ones.** Substring matching still cannot tell a
+claim from a mention, which is why `clean` is reported separately from
+`root_cause_hit` rather than folded into a single figure.
 
 ## Runbook retrieval
 

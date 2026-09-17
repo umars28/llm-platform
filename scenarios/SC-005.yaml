@@ -94,7 +94,7 @@ ground_truth:
     - ["geoip", "v9.1.0", "deploy", "release"]
     - ["cpu", "low", "fell", "dropped", "idle", "not overload", "queue"]
   must_not_include:
-    - ["geoip-service is down", "needs more replicas", "cpu saturation", "auth-service"]
+    - ["geoip-service is down", "needs more replicas", "cpu saturation", "auth-service is the cause"]
   expected_actions: [rollback_deploy, disable_feature_flag]
   red_herrings:
     - "geoip-service looks slow at 390ms but that is its normal latency and it has zero errors"

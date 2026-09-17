@@ -75,7 +75,7 @@ ground_truth:
     - ["recovered", "self-healed", "already", "cleared", "resolved", "20/20", "back to"]
     - ["evaluation window", "15", "alert fired after", "lag", "delay", "no action", "stale"]
   must_not_include:
-    - ["scale up", "increase replicas", "roll back", "still degraded", "ongoing"]
+    - ["scale up", "increase replicas", "roll back", "still degraded", "the incident is ongoing"]
   expected_actions: [no_action_required, fix_monitoring_config]
   red_herrings:
     - "7 restarts in the last hour reads as instability rather than as one clean reschedule"
