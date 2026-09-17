@@ -37,6 +37,8 @@ from typing import Any
 
 import yaml
 
+from .store import MemoryStore, QuotaStore
+
 
 class Denial(str, Enum):
     RATE = "rate_limit_exceeded"
@@ -110,16 +112,6 @@ class Tenant:
     burst: int = 20
     monthly_budget_usd: float = 100.0
 
-    # Spend already committed this window, including requests still in flight.
-    reserved_usd: float = 0.0
-    settled_usd: float = 0.0
-    _bucket: TokenBucket | None = None
-
-    def bucket(self) -> TokenBucket:
-        if self._bucket is None:
-            self._bucket = TokenBucket(self.requests_per_s, float(self.burst))
-        return self._bucket
-
     def may_use(self, model: str) -> bool:
         """An empty allow-list means every model, which is the sane default for
         a tenant that has not been restricted."""
@@ -130,23 +122,20 @@ class Tenant:
             for allowed in self.models
         )
 
-    @property
-    def remaining_usd(self) -> float:
-        return max(0.0, self.monthly_budget_usd - self.reserved_usd)
-
-    @property
-    def utilisation(self) -> float:
-        if not self.monthly_budget_usd:
-            return 0.0
-        return self.reserved_usd / self.monthly_budget_usd
-
 
 @dataclass
 class PolicyEngine:
+    """Decides admission. Counters live in the store, not in this process.
+
+    The store is what makes the decision correct with more than one replica:
+    per-process counters let a tenant spend its budget once per pod.
+    """
+
     tenants: dict[str, Tenant] = field(default_factory=dict)
+    store: QuotaStore = field(default_factory=MemoryStore)
 
     @classmethod
-    def from_file(cls, path: str | Path) -> "PolicyEngine":
+    def from_file(cls, path: str | Path, store: QuotaStore | None = None) -> "PolicyEngine":
         raw = yaml.safe_load(Path(path).read_text()) or {}
         tenants = {}
         for entry in raw.get("tenants", []):
@@ -159,7 +148,7 @@ class PolicyEngine:
                 monthly_budget_usd=float(entry.get("monthly_budget_usd", 100)),
             )
             tenants[tenant.api_key] = tenant
-        return cls(tenants)
+        return cls(tenants, store or MemoryStore())
 
     def tenant_for(self, api_key: str | None) -> Tenant | None:
         return self.tenants.get(api_key or "")
@@ -182,17 +171,23 @@ class PolicyEngine:
 
         # Budget before rate: a tenant that is out of money should be told that,
         # not told to slow down and try the same wall again.
-        if tenant.reserved_usd + estimated_usd > tenant.monthly_budget_usd:
+        reservation = self.store.reserve(
+            tenant.name, estimated_usd, tenant.monthly_budget_usd
+        )
+        if not reservation.ok:
             return Decision(
                 False,
-                f"tenant {tenant.name!r} has ${tenant.reserved_usd:.2f} of "
-                f"${tenant.monthly_budget_usd:.2f} committed; this request needs "
-                f"${estimated_usd:.4f}",
+                f"tenant {tenant.name!r}: {reservation.reason}; this request "
+                f"needs ${estimated_usd:.4f}",
                 Denial.BUDGET,
             ), tenant
 
-        ok, wait = tenant.bucket().take()
+        ok, wait = self.store.take_token(
+            tenant.name, tenant.requests_per_s, float(tenant.burst)
+        )
         if not ok:
+            # The reservation was taken before the rate check, so give it back.
+            self.store.release(tenant.name, estimated_usd)
             return Decision(
                 False,
                 f"tenant {tenant.name!r} is over {tenant.requests_per_s}/s",
@@ -200,7 +195,6 @@ class PolicyEngine:
                 retry_after_s=round(wait, 3),
             ), tenant
 
-        tenant.reserved_usd += estimated_usd
         return Decision(True, "admitted"), tenant
 
     def settle(self, tenant: Tenant, estimated_usd: float, actual_usd: float) -> None:
@@ -210,21 +204,28 @@ class PolicyEngine:
         a tenant is eventually throttled by the gateway's arithmetic rather than
         by its own spending.
         """
-        tenant.reserved_usd = max(0.0, tenant.reserved_usd - estimated_usd + actual_usd)
-        tenant.settled_usd += actual_usd
+        self.store.settle(tenant.name, estimated_usd, actual_usd)
 
     def release(self, tenant: Tenant, estimated_usd: float) -> None:
         """Give back the reservation for a call that never happened."""
-        tenant.reserved_usd = max(0.0, tenant.reserved_usd - estimated_usd)
+        self.store.release(tenant.name, estimated_usd)
 
     def report(self) -> list[dict[str, Any]]:
-        return [
-            {
+        rows = []
+        for t in sorted(self.tenants.values(), key=lambda x: x.name):
+            usage = self.store.usage(t.name)
+            rows.append({
                 "tenant": t.name,
-                "settled_usd": round(t.settled_usd, 6),
-                "reserved_usd": round(t.reserved_usd, 6),
+                "settled_usd": round(usage["settled_usd"], 6),
+                "reserved_usd": round(usage["reserved_usd"], 6),
                 "budget_usd": t.monthly_budget_usd,
-                "utilisation": round(t.utilisation, 4),
-            }
-            for t in sorted(self.tenants.values(), key=lambda x: x.name)
-        ]
+                "utilisation": round(
+                    usage["reserved_usd"] / t.monthly_budget_usd, 4
+                ) if t.monthly_budget_usd else 0.0,
+            })
+        return rows
+
+    @property
+    def shared_state(self) -> bool:
+        """Whether quota is enforced across replicas or only within this one."""
+        return self.store.shared

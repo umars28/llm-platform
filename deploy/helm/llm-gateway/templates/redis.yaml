@@ -1,0 +1,51 @@
+{{- include "llm-gateway.guard" . }}
+{{- if and .Values.redis.enabled (not .Values.redis.url) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-redis
+  labels: {{- include "llm-gateway.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    # Never two Redis pods at once: a second one would hold a different set of
+    # counters, which is the bug this Redis exists to fix.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "llm-gateway.name" . }}-redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "llm-gateway.name" . }}-redis
+    spec:
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          args: ["--save", "", "--appendonly", "no", "--maxmemory", "64mb",
+                 "--maxmemory-policy", "noeviction"]
+          # noeviction on purpose: silently dropping a quota counter under
+          # memory pressure would lift a budget without anyone noticing.
+          ports:
+            - containerPort: 6379
+              name: redis
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 25m, memory: 80Mi}
+            limits: {memory: 80Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-redis
+  labels: {{- include "llm-gateway.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 6379
+      targetPort: redis
+  selector:
+    app.kubernetes.io/name: {{ include "llm-gateway.name" . }}-redis
+{{- end }}

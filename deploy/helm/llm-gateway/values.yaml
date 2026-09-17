@@ -28,6 +28,14 @@ resources:
   limits:
     memory: 192Mi
 
+redis:
+  # Quota counters live here. Without it each replica enforces the budget
+  # against its own arithmetic, so a tenant can spend its limit once per pod --
+  # the chart refuses to render more than one replica without it.
+  enabled: true
+  url: ""            # external Redis; leave blank to run the bundled one
+  image: redis:7.4-alpine
+
 autoscaling:
   enabled: true
   minReplicas: 2

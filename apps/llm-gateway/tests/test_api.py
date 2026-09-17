@@ -222,3 +222,24 @@ def test_a_bad_body_from_an_unknown_key_still_authenticates_first():
     c = client(FakeUpstream(ok_result()))
     r = c.post("/v1/messages", headers={"x-api-key": "nope"}, json={"model": "claude-opus-5"})
     assert r.status_code == 401
+
+
+# -- quota state -------------------------------------------------------
+
+def test_readiness_reports_whether_quota_is_shared():
+    """A single-replica default is fine; pretending it is shared is not."""
+    body = client(FakeUpstream(ok_result())).get("/readyz").json()
+    assert body["quota_store"]["shared"] is False
+    assert body["quota_store"]["healthy"] is True
+
+
+def test_readiness_fails_when_the_quota_store_is_unreachable():
+    """Budgets fail closed, so serving would mean 402 for everyone."""
+    from llm_gateway.store import RedisStore
+    from tests.test_store import BrokenRedis
+
+    app = create_app(CONFIG, FakeUpstream(ok_result()))
+    app.state.policy.store = RedisStore("", client=BrokenRedis())
+    r = TestClient(app).get("/readyz")
+    assert r.status_code == 503
+    assert r.json()["quota_store"]["healthy"] is False

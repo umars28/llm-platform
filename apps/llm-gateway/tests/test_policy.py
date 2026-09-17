@@ -101,8 +101,7 @@ def test_spend_is_reserved_at_admission_not_at_completion():
     e = engine(monthly_budget_usd=1.0)
     for _ in range(5):
         e.admit("key-a", "m", estimated_usd=0.2)
-    tenant = e.tenant_for("key-a")
-    assert tenant.reserved_usd == pytest.approx(1.0)
+    assert e.store.usage("team-a")["reserved_usd"] == pytest.approx(1.0)
     assert e.admit("key-a", "m", estimated_usd=0.2)[0].denial is Denial.BUDGET
 
 
@@ -110,8 +109,9 @@ def test_settlement_replaces_the_estimate_with_the_real_cost():
     e = engine()
     _, tenant = e.admit("key-a", "m", estimated_usd=0.50)
     e.settle(tenant, estimated_usd=0.50, actual_usd=0.10)
-    assert tenant.reserved_usd == pytest.approx(0.10)
-    assert tenant.settled_usd == pytest.approx(0.10)
+    usage = e.store.usage("team-a")
+    assert usage["reserved_usd"] == pytest.approx(0.10)
+    assert usage["settled_usd"] == pytest.approx(0.10)
 
 
 def test_estimate_error_does_not_accumulate_across_requests():
@@ -120,7 +120,7 @@ def test_estimate_error_does_not_accumulate_across_requests():
     for _ in range(50):
         _, tenant = e.admit("key-a", "m", estimated_usd=0.10)
         e.settle(tenant, 0.10, 0.01)
-    assert tenant.reserved_usd == pytest.approx(0.50)
+    assert e.store.usage("team-a")["reserved_usd"] == pytest.approx(0.50)
     assert e.admit("key-a", "m", estimated_usd=0.10)[0].allowed
 
 
@@ -128,7 +128,7 @@ def test_a_failed_call_releases_its_reservation():
     e = engine(monthly_budget_usd=1.0)
     _, tenant = e.admit("key-a", "m", estimated_usd=0.9)
     e.release(tenant, 0.9)
-    assert tenant.reserved_usd == 0.0
+    assert e.store.usage("team-a")["reserved_usd"] == 0.0
     assert e.admit("key-a", "m", estimated_usd=0.9)[0].allowed
 
 
@@ -137,7 +137,7 @@ def test_release_and_settle_never_go_negative():
     tenant = e.tenant_for("key-a")
     e.release(tenant, 5.0)
     e.settle(tenant, 5.0, 0.0)
-    assert tenant.reserved_usd == 0.0
+    assert e.store.usage("team-a")["reserved_usd"] == 0.0
 
 
 # -- config and reporting ----------------------------------------------

@@ -32,6 +32,7 @@ from .metrics import Metrics
 from .policy import PolicyEngine
 from .pricing import estimate_usd, settle_usd
 from .routing import AllProvidersFailed, Router
+from .store import build_store
 from .upstream import Upstream
 
 CONFIG_PATH = Path(os.environ.get("GATEWAY_CONFIG", "config/gateway.yaml"))
@@ -48,7 +49,8 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
 
 def create_app(config: dict[str, Any] | None = None, upstream: Upstream | None = None) -> FastAPI:
     config = config if config is not None else load_config()
-    policy = PolicyEngine.from_file(CONFIG_PATH) if config is None else _policy_from(config)
+    store = build_store(os.environ.get("GATEWAY_REDIS_URL"))
+    policy = _policy_from(config, store)
     router = Router.from_config(config)
     metrics = Metrics()
     sender = upstream or Upstream(
@@ -74,10 +76,21 @@ def create_app(config: dict[str, Any] | None = None, upstream: Upstream | None =
     async def readyz() -> JSONResponse:
         """Readiness: traffic can actually be served right now."""
         healthy = [p.name for p in router.providers if p.healthy]
-        ready = bool(healthy)
+        quota_ok = policy.store.healthy()
+        # Quota state is part of readiness. With a shared store unreachable,
+        # budgets fail closed, so serving traffic would mean refusing every
+        # request -- better to leave the rotation than to answer 402 to everyone.
+        ready = bool(healthy) and quota_ok
         return JSONResponse(
-            {"ready": ready, "healthy_providers": healthy,
-             "providers": router.report()},
+            {
+                "ready": ready,
+                "healthy_providers": healthy,
+                "quota_store": {
+                    "shared": policy.shared_state,
+                    "healthy": quota_ok,
+                },
+                "providers": router.report(),
+            },
             status_code=200 if ready else 503,
         )
 
@@ -171,7 +184,7 @@ def create_app(config: dict[str, Any] | None = None, upstream: Upstream | None =
     return app
 
 
-def _policy_from(config: dict[str, Any]) -> PolicyEngine:
+def _policy_from(config: dict[str, Any], store=None) -> PolicyEngine:
     from .policy import Tenant
 
     tenants = {}
@@ -184,7 +197,7 @@ def _policy_from(config: dict[str, Any]) -> PolicyEngine:
             monthly_budget_usd=float(entry.get("monthly_budget_usd", 100)),
         )
         tenants[t.api_key] = t
-    return PolicyEngine(tenants)
+    return PolicyEngine(tenants, store) if store is not None else PolicyEngine(tenants)
 
 
 def run() -> None:

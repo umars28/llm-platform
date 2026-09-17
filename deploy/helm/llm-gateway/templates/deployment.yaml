@@ -4,6 +4,7 @@ metadata:
   name: {{ include "llm-gateway.fullname" . }}
   labels: {{- include "llm-gateway.labels" . | nindent 4 }}
 spec:
+  {{- include "llm-gateway.guard" . }}
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
@@ -39,6 +40,10 @@ spec:
           env:
             - name: GATEWAY_CONFIG
               value: /etc/llm-gateway/gateway.yaml
+            {{- if or .Values.redis.enabled .Values.redis.url }}
+            - name: GATEWAY_REDIS_URL
+              value: {{ .Values.redis.url | default (printf "redis://%s-redis:6379/0" (include "llm-gateway.fullname" .)) | quote }}
+            {{- end }}
           {{- if .Values.providerSecret.name }}
           envFrom:
             - secretRef:

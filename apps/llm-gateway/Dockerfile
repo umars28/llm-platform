@@ -9,7 +9,7 @@ WORKDIR /app
 COPY pyproject.toml ./
 RUN uv venv /opt/venv \
  && VIRTUAL_ENV=/opt/venv uv pip install --no-cache \
-      fastapi uvicorn[standard] httpx pyyaml prometheus-client
+      fastapi uvicorn[standard] httpx pyyaml prometheus-client redis
 
 FROM python:3.12-slim AS runtime
 
