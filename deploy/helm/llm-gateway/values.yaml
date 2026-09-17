@@ -1,0 +1,51 @@
+replicaCount: 2
+
+image:
+  repository: llm-gateway
+  tag: "0.1.0"
+  # Never in a local cluster: the image is built here and not in any registry,
+  # so Always would make every pod fail to pull.
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+resources:
+  # Memory request equals its limit; CPU has a request and deliberately no
+  # limit. This is Burstable, not Guaranteed, and that is the intended trade:
+  #
+  #   Equal memory stops the pod being killed for growth the scheduler did not
+  #   account for -- the SC-030 failure in ops-copilot, where a limit far above
+  #   its request starved a node and evicted its neighbours.
+  #
+  #   No CPU limit avoids throttling a latency-sensitive proxy at exactly the
+  #   number someone guessed months ago. CPU is compressible and memory is not,
+  #   so a CPU limit does not protect the node the way a memory limit does.
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    memory: 192Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+# Providers read their credentials from this secret. It is created out of band;
+# the chart refers to it rather than templating keys into a manifest.
+providerSecret:
+  name: llm-gateway-providers
+  create: false
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+serviceMonitor:
+  # Prometheus Operator scrape config. Off by default so the chart installs on
+  # a cluster without the CRD.
+  enabled: false
+  interval: 15s

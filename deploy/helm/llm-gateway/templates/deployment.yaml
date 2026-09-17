@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}
+  labels: {{- include "llm-gateway.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels: {{- include "llm-gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "llm-gateway.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Roll the pods when the config changes. Without this a ConfigMap edit
+        # is applied to new pods only, so the fleet silently runs two policies.
+        checksum/config: {{ .Files.Get "files/gateway.yaml" | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        # Two replicas on one node is one node away from an outage.
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "llm-gateway.selectorLabels" . | nindent 14 }}
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: GATEWAY_CONFIG
+              value: /etc/llm-gateway/gateway.yaml
+          {{- if .Values.providerSecret.name }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.providerSecret.name }}
+                optional: true
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            # Liveness never checks upstreams: restarting the gateway does not
+            # fix a provider outage, it just adds a cold start to it.
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 5
+            failureThreshold: 2
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 3
+            failureThreshold: 20
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/llm-gateway
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "llm-gateway.fullname" . }}-config
+        - name: tmp
+          emptyDir: {}
