@@ -14,7 +14,27 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CORPUS_DIR = Path(os.environ.get("RUNBOOK_RAG_CORPUS", REPO_ROOT / "corpus"))
 RAW_DIR = CORPUS_DIR / "raw"
 CHUNK_DIR = CORPUS_DIR / "chunks"
-EVAL_DIR = Path(os.environ.get("RUNBOOK_RAG_EVAL", REPO_ROOT / "eval"))
+def _find_data(local: Path, shared_name: str) -> Path:
+    """Locate a data directory, standalone or inside the monorepo.
+
+    Each project keeps working on its own, where its data sits beside the source.
+    Inside the platform repository the corpora are centralised under
+    `benchmarks/`, so this walks up to find them. Without the fallback the
+    subtree merge left six of eight projects unable to find their own fixtures --
+    which nobody noticed, because their tests had never been run in the new
+    location.
+    """
+    if local.exists():
+        return local
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "benchmarks" / shared_name
+        if candidate.exists():
+            return candidate
+    return local
+
+
+EVAL_DIR = Path(os.environ.get("RUNBOOK_RAG_EVAL", _find_data(REPO_ROOT / "eval", "runbook-queries")))
 RUNS_DIR = REPO_ROOT / "runs"
 CACHE_DIR = REPO_ROOT / ".cache"
 

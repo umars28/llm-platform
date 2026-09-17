@@ -22,7 +22,27 @@ BOLD, DIM, RED, GREEN, YELLOW, RESET = (
     "\033[1m", "\033[2m", "\033[31m", "\033[32m", "\033[33m", "\033[0m",
 )
 
-DEFAULT_CASES = Path("cases/ops-copilot.yaml")
+def _find_data(local: Path, shared_name: str) -> Path:
+    """Locate a data directory, standalone or inside the monorepo.
+
+    Each project keeps working on its own, where its data sits beside the source.
+    Inside the platform repository the corpora are centralised under
+    `benchmarks/`, so this walks up to find them. Without the fallback the
+    subtree merge left six of eight projects unable to find their own fixtures --
+    which nobody noticed, because their tests had never been run in the new
+    location.
+    """
+    if local.exists():
+        return local
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "benchmarks" / shared_name
+        if candidate.exists():
+            return candidate
+    return local
+
+
+DEFAULT_CASES = _find_data(Path("cases"), "eval-cases") / "ops-copilot.yaml"
 DEFAULT_TRACES = Path("traces")
 
 

@@ -17,7 +17,27 @@ from pathlib import Path
 
 import yaml
 
-CORPUS_DIR = Path(__file__).resolve().parents[2] / "corpus"
+def _find_data(local: Path, shared_name: str) -> Path:
+    """Locate a data directory, standalone or inside the monorepo.
+
+    Each project keeps working on its own, where its data sits beside the source.
+    Inside the platform repository the corpora are centralised under
+    `benchmarks/`, so this walks up to find them. Without the fallback the
+    subtree merge left six of eight projects unable to find their own fixtures --
+    which nobody noticed, because their tests had never been run in the new
+    location.
+    """
+    if local.exists():
+        return local
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "benchmarks" / shared_name
+        if candidate.exists():
+            return candidate
+    return local
+
+
+CORPUS_DIR = _find_data(Path(__file__).resolve().parents[2] / "corpus", "redteam")
 
 
 @dataclass(frozen=True)

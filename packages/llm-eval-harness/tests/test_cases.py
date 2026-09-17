@@ -46,7 +46,9 @@ def test_a_trace_with_no_proposal_falls_back_to_final_text():
 
 # -- running -----------------------------------------------------------
 
-CASES = load_cases(Path("cases/ops-copilot.yaml"))
+from llm_eval.cli import DEFAULT_CASES
+
+CASES = load_cases(DEFAULT_CASES)
 SC001 = next(c for c in CASES if c.id == "SC-001")
 
 

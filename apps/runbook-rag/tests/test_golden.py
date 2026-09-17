@@ -11,12 +11,25 @@ from collections import Counter
 import pytest
 import yaml
 
-from runbook_rag.config import EVAL_DIR
+from runbook_rag.config import EVAL_DIR, RAW_DIR
 from runbook_rag.golden import LabelError, Query, load_golden
 from runbook_rag.ingest import Document, load_saved
 
+# The document corpus is fetched rather than committed (381 pages, 3.8MB), so
+# these skip with a reason when it is absent instead of failing collection --
+# an error here reads like broken code rather than a missing fetch step.
+CORPUS_PRESENT = (RAW_DIR / "documents.jsonl").exists()
+pytestmark = pytest.mark.skipif(
+    not CORPUS_PRESENT,
+    reason="corpus not ingested; run `runbook-rag fetch`",
+)
+
+
 RAW = yaml.safe_load((EVAL_DIR / "golden.yaml").read_text())["queries"]
-QUERIES = load_golden()
+# Loaded only when the corpus is present. `pytestmark` skips tests, but
+# module-level code still runs at import, so an unconditional call here fails
+# collection before the skip can apply.
+QUERIES = load_golden() if CORPUS_PRESENT else []
 
 
 def test_every_label_resolves_to_a_document_in_the_corpus():
