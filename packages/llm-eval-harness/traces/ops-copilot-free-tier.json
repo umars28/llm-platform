@@ -1,0 +1,1164 @@
+{
+  "traces": [
+    {
+      "scenario_id": "SC-001",
+      "scenario_title": "Checkout p99 latency spike from DB connection pool exhaustion",
+      "model": "nex-agi/nex-n2.5-pro:free",
+      "proposal": {
+        "root_cause": "checkout-api v2.31.0 was deployed at 2026-09-12T01:36:00Z and added a new per-request Postgres audit write alongside the order-history sidebar. Approximately 28 minutes later, checkout-api's 20-connection database pool became fully occupied (db_pool_in_use=20 and db_pool_size=20); pool waits reached 4.21 s with 61 waiters, followed by 88 then 415 observed pool-acquisition timeouts. Requests blocked for the 5000 ms pool timeout and then returned 500s (390 observed at 02:13), driving p99 from 240 ms before the release to 4210 ms and the 5xx rate from 0.02/s to 31.2/s. This is local pool exhaustion caused by the new per-request database work: postgres-primary is not saturated (97/400 connections, 33% CPU, 0.3 s lag), inventory-api has no errors, checkout CPU is only 29%, and retry-related logs are absent.",
+        "action_id": "rollback_deploy",
+        "action_params": {
+          "service": "checkout-api",
+          "target_version": "v2.30.0"
+        },
+        "justification": "The incident began within 30 minutes of v2.31.0 and the release added the exact database operation responsible for saturating checkout's pool. RB-014 prefers rolling back an offending deploy when the added query is not essential, and RB-002 makes rollback the default for an active release-correlated P1 because it removes the causal per-request write and restores the known-good request path. Increasing the pool would only mask the regression and add more connections to Postgres; scaling or restarting would not remove the extra query.",
+        "confidence": 0.97
+      },
+      "change_requests": [
+        {
+          "action_id": "rollback_deploy",
+          "action_params": {
+            "service": "checkout-api",
+            "target_version": "v2.30.0"
+          },
+          "reason": "Queued to stop the active P1 caused by checkout-api v2.31.0's new per-request Postgres audit write. That write saturated checkout's fixed 20-connection pool, producing 4.21 s pool waits, pool-acquisition timeouts, and rising 5xx errors while Postgres remained healthy at 97/400 connections and 33% CPU. Rolling back to v2.30.0 removes the causal database work and follows the runbook's release-correlated P1 guidance. The change is queued for human approval and has not been applied."
+        }
+      ],
+      "tool_calls": [
+        {
+          "name": "list_services",
+          "input": {}
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "checkout-api",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "list_metrics",
+          "input": {
+            "service": "checkout-api"
+          }
+        },
+        {
+          "name": "search_runbook",
+          "input": {
+            "query": "checkout-api p99 latency exceeds 800 ms and error rate is rising; diagnose dependency versus local resource saturation and identify approved remediation",
+            "limit": 5
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "checkout-api",
+            "since_minutes": 120
+          }
+        },
+        {
+          "name": "list_metrics",
+          "input": {
+            "service": "inventory-api"
+          }
+        },
+        {
+          "name": "list_metrics",
+          "input": {
+            "service": "postgres-primary"
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "checkout-api",
+            "pattern": "could not acquire connection|connection pool|pool exhausted|postgres|database|timeout",
+            "level": "WARN",
+            "since_minutes": 120,
+            "limit": 50
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "checkout-api",
+            "pattern": "could not acquire connection|connection pool|pool exhausted|postgres|database|timeout",
+            "level": "ERROR",
+            "since_minutes": 120,
+            "limit": 50
+          }
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "inventory-api",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "postgres-primary",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "postgres-primary",
+            "since_minutes": 120
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "postgres-primary",
+            "pattern": "connection|too many clients|slow query|lock|timeout|deadlock|CPU|saturation",
+            "level": "ERROR",
+            "since_minutes": 120,
+            "limit": 50
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "postgres-primary",
+            "pattern": "connection|too many clients|slow query|lock|timeout|deadlock|CPU|saturation",
+            "level": "WARN",
+            "since_minutes": 120,
+            "limit": 50
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "inventory-api",
+            "pattern": "error|timeout|postgres|database|latency|slow",
+            "level": "ERROR",
+            "since_minutes": 120,
+            "limit": 50
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "inventory-api",
+            "pattern": "error|timeout|postgres|database|latency|slow",
+            "level": "WARN",
+            "since_minutes": 120,
+            "limit": 50
+          }
+        },
+        {
+          "name": "describe_k8s_resource",
+          "input": {
+            "kind": "Deployment",
+            "name": "checkout-api",
+            "namespace": "prod"
+          }
+        },
+        {
+          "name": "describe_k8s_resource",
+          "input": {
+            "kind": "StatefulSet",
+            "name": "postgres-primary",
+            "namespace": "prod"
+          }
+        },
+        {
+          "name": "search_runbook",
+          "input": {
+            "query": "checkout-api v2.31.0 added per-request Postgres audit write; database pool pinned at 20 and pool acquisition times out; choose rollback versus increasing pool",
+            "limit": 5
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "checkout-api",
+            "pattern": "audit|order history|sidebar|INSERT|order_history",
+            "level": "INFO",
+            "since_minutes": 120,
+            "limit": 50
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "checkout-api",
+            "pattern": "audit|order history|sidebar|INSERT|order_history",
+            "level": "ERROR",
+            "since_minutes": 120,
+            "limit": 50
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "checkout-api",
+            "pattern": "retry|retried|inventory-api",
+            "level": "ERROR",
+            "since_minutes": 120,
+            "limit": 50
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "checkout-api",
+            "pattern": "retry|retried|inventory-api",
+            "level": "WARN",
+            "since_minutes": 120,
+            "limit": 50
+          }
+        },
+        {
+          "name": "list_remediation_actions",
+          "input": {}
+        },
+        {
+          "name": "search_runbook",
+          "input": {
+            "query": "active P1 began 28 minutes after checkout-api v2.31.0 release adding noncritical order history sidebar and per-request audit write; pool exhausted; should roll back to last known-good version or raise pool to 40",
+            "limit": 5
+          }
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "checkout-api",
+            "since_minutes": 1440
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "checkout-api",
+            "level": "ERROR",
+            "since_minutes": 120,
+            "limit": 50
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "checkout-api",
+            "level": "WARN",
+            "since_minutes": 120,
+            "limit": 50
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "postgres-primary",
+            "level": "ERROR",
+            "since_minutes": 120,
+            "limit": 50
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "inventory-api",
+            "level": "ERROR",
+            "since_minutes": 120,
+            "limit": 50
+          }
+        },
+        {
+          "name": "propose_remediation",
+          "input": {
+            "root_cause": "checkout-api v2.31.0 was deployed at 2026-09-12T01:36:00Z and added a new per-request Postgres audit write alongside the order-history sidebar. Approximately 28 minutes later, checkout-api's 20-connection database pool became fully occupied (db_pool_in_use=20 and db_pool_size=20); pool waits reached 4.21 s with 61 waiters, followed by 88 then 415 observed pool-acquisition timeouts. Requests blocked for the 5000 ms pool timeout and then returned 500s (390 observed at 02:13), driving p99 from 240 ms before the release to 4210 ms and the 5xx rate from 0.02/s to 31.2/s. This is local pool exhaustion caused by the new per-request database work: postgres-primary is not saturated (97/400 connections, 33% CPU, 0.3 s lag), inventory-api has no errors, checkout CPU is only 29%, and retry-related logs are absent.",
+            "action_id": "rollback_deploy",
+            "action_params": {
+              "service": "checkout-api",
+              "target_version": "v2.30.0"
+            },
+            "justification": "The incident began within 30 minutes of v2.31.0 and the release added the exact database operation responsible for saturating checkout's pool. RB-014 prefers rolling back an offending deploy when the added query is not essential, and RB-002 makes rollback the default for an active release-correlated P1 because it removes the causal per-request write and restores the known-good request path. Increasing the pool would only mask the regression and add more connections to Postgres; scaling or restarting would not remove the extra query.",
+            "confidence": 0.97
+          }
+        },
+        {
+          "name": "request_remediation",
+          "input": {
+            "action_id": "rollback_deploy",
+            "action_params": {
+              "service": "checkout-api",
+              "target_version": "v2.30.0"
+            },
+            "reason": "Queued to stop the active P1 caused by checkout-api v2.31.0's new per-request Postgres audit write. That write saturated checkout's fixed 20-connection pool, producing 4.21 s pool waits, pool-acquisition timeouts, and rising 5xx errors while Postgres remained healthy at 97/400 connections and 33% CPU. Rolling back to v2.30.0 removes the causal database work and follows the runbook's release-correlated P1 guidance. The change is queued for human approval and has not been applied."
+          }
+        }
+      ],
+      "tool_call_count": 32,
+      "read_tool_calls": 30,
+      "turns": 9,
+      "final_text": "## Diagnosis\n\n**Release-induced checkout-api database connection-pool exhaustion.**\n\n- **Change:** `checkout-api v2.31.0` deployed at **01:36Z**, adding an order-history sidebar and a **new Postgres audit write on every request**.\n- **Onset:** Latency degradation began around **02:04Z**, 28 minutes after deployment.\n- **Failure mechanism:**\n  - Checkout\u2019s pool reached **20/20 connections**.\n  - Pool waits reached **4.21 seconds** with **61 waiters**.\n  - Pool-acquisition timeouts increased from **88 to 415** occurrences.\n  - Requests blocked for the configured **5000 ms** timeout and returned 500s.\n- **Impact:** p99 rose from **240 ms** before deployment to **4210 ms**; the 5xx rate rose from **0.02/s to 31.2/s**.\n\nPostgres was not globally saturated: **97/400 connections**, **33% CPU**, and **0.3 s replication lag**. Inventory-api had no errors, checkout CPU remained around **29%**, and no retry storm was found.\n\n## Remediation\n\nQueued a rollback of `checkout-api` from **v2.31.0 to v2.30.0**.\n\n- **Change request:** `CR-b90a2b1c`\n- **State:** `pending`\n- **Approval command:** `ops-copilot approve CR-b90a2b1c`\n- **Current status:** Nothing has been applied yet; the rollback is awaiting human approval.",
+      "elapsed_s": 163.92,
+      "input_tokens": 14789,
+      "output_tokens": 6516,
+      "cache_read_tokens": 85440,
+      "cost_usd": 0.0,
+      "error": null,
+      "error_kind": null
+    },
+    {
+      "scenario_id": "SC-002",
+      "scenario_title": "Recommendation service OOMKilled in a loop after a caching change",
+      "model": "nex-agi/nex-n2.5-pro:free",
+      "proposal": {
+        "action_id": "revert_config_change",
+        "action_params": {
+          "target": "reco-api.FEATURE_CACHE",
+          "previous_value": "disabled"
+        },
+        "confidence": 0.98,
+        "justification": "Disabling the in-process feature cache removes the newly introduced unbounded allocation path and restores the previously sustainable feature-store call pattern. It addresses the cause rather than masking it; increasing the memory limit would only postpone the next OOM, while restarting or scaling v4.2.0 would reproduce the growth. The queued reversal is CR-0080f90c.",
+        "root_cause": "The 10:05Z reco-api v4.2.0 rollout (c71be03) enabled FEATURE_CACHE and introduced an unbounded in-process dict keyed by user_id. The cache reached 184,203 entries (~612 MiB) by 10:40Z and feature-store calls fell from ~680 to ~88 req/s, confirming activation. reco-api working set then grew monotonically from 640 MiB to 1,920 MiB against a 2 Gi container limit while the JVM approached its 1.856 Gi heap ceiling, producing repeated long GC pauses and 14 'Java heap space' OOMs. Kubernetes OOM-killed the containers, causing 14 restarts and leaving only 2 of 8 pods ready; reduced capacity raised p99 latency from 96 ms to 310 ms. feature-store had no recent errors or releases, and Redis remained stable, ruling out the dependencies as the primary cause."
+      },
+      "change_requests": [
+        {
+          "action_id": "revert_config_change",
+          "action_params": {
+            "target": "reco-api.FEATURE_CACHE",
+            "previous_value": "disabled"
+          },
+          "reason": "v4.2.0 enabled an unbounded in-process feature cache keyed by user_id. reco-api working set grew monotonically from 640 MiB to about 1.9 GiB, logs show 184,203 cache entries (~612 MiB), repeated GC pressure near the 1.856 GiB heap, and 14 Java heap OOMs matching the 14 restarts and Kubernetes OOMKilling events. Disabling FEATURE_CACHE directly removes the causal leak and restores the pre-release feature-store path, which handled ~680 req/s without recent feature-store errors. Raising the memory limit would only delay failure, and restarting v4.2.0 would reproduce it."
+        }
+      ],
+      "tool_calls": [
+        {
+          "name": "list_services",
+          "input": {}
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "reco-api",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "describe_k8s_resource",
+          "input": {
+            "kind": "Deployment",
+            "name": "reco-api",
+            "namespace": "prod"
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "reco-api",
+            "level": "ERROR",
+            "since_minutes": 60,
+            "limit": 50
+          }
+        },
+        {
+          "name": "list_metrics",
+          "input": {
+            "service": "reco-api"
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "reco-api",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "list_metrics",
+          "input": {
+            "service": "feature-store"
+          }
+        },
+        {
+          "name": "list_metrics",
+          "input": {
+            "service": "redis-cache"
+          }
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "feature-store",
+            "get_recent_deploys": ""
+          }
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "redis-cache",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "search_runbook",
+          "input": {
+            "query": "reco-api pod OOMKilled Java heap after v4.2.0 in-process unbounded user_id feature cache; rollback or disable FEATURE_CACHE, memory limits and approved remediation",
+            "limit": 5
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "feature-store",
+            "level": "ERROR",
+            "since_minutes": 180,
+            "limit": 50
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "redis-cache",
+            "level": "ERROR",
+            "since_minutes": 180,
+            "limit": 50
+          }
+        },
+        {
+          "name": "describe_k8s_resource",
+          "input": {
+            "kind": "Deployment",
+            "name": "feature-store",
+            "namespace": "prod"
+          }
+        },
+        {
+          "name": "describe_k8s_resource",
+          "input": {
+            "kind": "Deployment",
+            "name": "redis-cache",
+            "namespace": "prod"
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "redis-cache",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "reco-api",
+            "since_minutes": 1440
+          }
+        },
+        {
+          "name": "list_remediation_actions",
+          "input": {}
+        },
+        {
+          "name": "search_runbook",
+          "input": {
+            "query": "rollback_deploy last known-good release for reco-api after v4.2.0; disable FEATURE_CACHE or memory limit increase guidance",
+            "limit": 5
+          }
+        },
+        {
+          "name": "search_runbook",
+          "input": {
+            "query": "FEATURE_CACHE configuration setting reco-api prior value disabled rollback cache feature vectors in-process",
+            "limit": 5
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "reco-api",
+            "pattern": "FEATURE_CACHE|in-process|user_id|feature cache",
+            "since_minutes": 180,
+            "limit": 50
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "reco-api",
+            "level": "WARN",
+            "since_minutes": 180,
+            "limit": 50
+          }
+        },
+        {
+          "name": "request_remediation",
+          "input": {
+            "action_id": "revert_config_change",
+            "action_params": {
+              "target": "reco-api.FEATURE_CACHE",
+              "previous_value": "disabled"
+            },
+            "reason": "v4.2.0 enabled an unbounded in-process feature cache keyed by user_id. reco-api working set grew monotonically from 640 MiB to about 1.9 GiB, logs show 184,203 cache entries (~612 MiB), repeated GC pressure near the 1.856 GiB heap, and 14 Java heap OOMs matching the 14 restarts and Kubernetes OOMKilling events. Disabling FEATURE_CACHE directly removes the causal leak and restores the pre-release feature-store path, which handled ~680 req/s without recent feature-store errors. Raising the memory limit would only delay failure, and restarting v4.2.0 would reproduce it."
+          }
+        },
+        {
+          "name": "propose_remediation",
+          "input": {
+            "action_id": "revert_config_change",
+            "action_params": {
+              "target": "reco-api.FEATURE_CACHE",
+              "previous_value": "disabled"
+            },
+            "confidence": 0.98,
+            "justification": "Disabling the in-process feature cache removes the newly introduced unbounded allocation path and restores the previously sustainable feature-store call pattern. It addresses the cause rather than masking it; increasing the memory limit would only postpone the next OOM, while restarting or scaling v4.2.0 would reproduce the growth. The queued reversal is CR-0080f90c.",
+            "root_cause": "The 10:05Z reco-api v4.2.0 rollout (c71be03) enabled FEATURE_CACHE and introduced an unbounded in-process dict keyed by user_id. The cache reached 184,203 entries (~612 MiB) by 10:40Z and feature-store calls fell from ~680 to ~88 req/s, confirming activation. reco-api working set then grew monotonically from 640 MiB to 1,920 MiB against a 2 Gi container limit while the JVM approached its 1.856 Gi heap ceiling, producing repeated long GC pauses and 14 'Java heap space' OOMs. Kubernetes OOM-killed the containers, causing 14 restarts and leaving only 2 of 8 pods ready; reduced capacity raised p99 latency from 96 ms to 310 ms. feature-store had no recent errors or releases, and Redis remained stable, ruling out the dependencies as the primary cause."
+          }
+        }
+      ],
+      "tool_call_count": 24,
+      "read_tool_calls": 22,
+      "turns": 7,
+      "final_text": "## Diagnosis\n\n**Root cause:** `reco-api` **v4.2.0** introduced an unbounded in-process feature cache keyed by `user_id`. The cache grew continuously until pods exhausted their memory limits and entered `CrashLoopBackOff`.\n\n### Evidence\n\n- Rollout at **10:05Z** enabled `FEATURE_CACHE`; its change summary explicitly identifies an **unbounded dict keyed by `user_id`**.\n- Cache reached **184,203 entries / ~612 MiB** by 10:40Z.\n- Working-set memory grew monotonically from **640 MiB to ~1,920 MiB**, near the **2 Gi container limit**.\n- JVM heap approached its **1.856 Gi maximum**, with repeated long GC pauses.\n- Logs contain **14 Java heap OOMs**, matching the **14 pod restarts** and Kubernetes `OOMKilling` events.\n- Only **2 of 8 replicas** are ready; p99 latency increased from **96 ms to 310 ms**.\n- `feature-store` had no recent releases or errors, and Redis remained stable, ruling out a primary dependency failure.\n\n## Remediation\n\nQueued for human approval:\n\n- **Action:** Revert `reco-api.FEATURE_CACHE` to `disabled`\n- **Request:** `CR-0080f90c`\n- **State:** `pending`\n- **Approval command:** `ops-copilot approve CR-0080f90c`\n\nNo production change has been applied yet. Disabling the cache directly removes the unbounded allocation path; increasing the memory limit would only delay the next OOM.",
+      "elapsed_s": 153.28,
+      "input_tokens": 21590,
+      "output_tokens": 5170,
+      "cache_read_tokens": 51008,
+      "cost_usd": 0.0,
+      "error": null,
+      "error_kind": null
+    },
+    {
+      "scenario_id": "SC-005",
+      "scenario_title": "Async gateway stalls on a blocking call added to the event loop",
+      "model": "nex-agi/nex-n2.5-pro:free",
+      "proposal": {
+        "action_id": "disable_feature_flag",
+        "action_params": {
+          "flag": "GEOIP_ENABLED"
+        },
+        "confidence": 0.98,
+        "justification": "This directly removes the blocking call introduced by v9.1.0. RB-033 states that adding replicas does not fix synchronous calls blocking an async event loop. A timeout increase would lengthen blocking, auth is healthy, GeoIP has no errors, and the Deployment has all 12 replicas ready, so capacity, auth, dependency outage, and pod-loss remedies do not address the cause.",
+        "root_cause": "api-gateway v9.1.0 deployed at 2026-09-14T13:18Z added a per-request synchronous GeoIP client. The geoip-service remained healthy (p99 388-396 ms, zero 5xx), but each 390 ms synchronous lookup blocked the gateway's four event-loop workers. Gateway event_loop_lag_ms rose from 3-4 ms to 410 ms by 13:32 and 970 ms at the alert, while CPU fell from 48% to 14% and completed throughput fell from 4,180 to 620 req/s. Requests therefore accumulated from 18 to 5,000 in the queue, producing the eight-minute queue-depth alert and client timeouts. Gateway logs explicitly reported event-loop blocking in geoip_lookup (1,200 occurrences at 412 ms and 5,400 at 980 ms); auth stayed at 13-14 ms p99 and all 12 gateway replicas remained ready."
+      },
+      "change_requests": [
+        {
+          "action_id": "disable_feature_flag",
+          "action_params": {
+            "flag": "GEOIP_ENABLED"
+          },
+          "reason": "P1 gateway queue growth is caused by api-gateway v9.1.0's new synchronous geoip_lookup blocking each event-loop worker while waiting for a healthy ~390 ms dependency response. Disabling GEOIP_ENABLED removes the blocking call and restores the prior request path; scaling would not fix event-loop blocking, and retained deploy history does not expose a safe prior version for rollback."
+        }
+      ],
+      "tool_calls": [
+        {
+          "name": "list_services",
+          "input": {}
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "api-gateway",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "list_metrics",
+          "input": {
+            "service": "api-gateway"
+          }
+        },
+        {
+          "name": "search_runbook",
+          "input": {
+            "query": "GatewayRequestQueueDepth api-gateway request queue exceeds 5000 low CPU client timeouts downstream dependency recent deploy",
+            "limit": 5
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "api-gateway",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "api-gateway",
+            "pattern": "geoip|auth|timeout|blocking|slow",
+            "since_minutes": 180,
+            "limit": 50
+          }
+        },
+        {
+          "name": "list_metrics",
+          "input": {
+            "service": "geoip-service"
+          }
+        },
+        {
+          "name": "list_metrics",
+          "input": {
+            "service": "auth-service"
+          }
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "geoip-service",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "auth-service",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "geoip-service",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "auth-service",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "geoip-service",
+            "since_minutes": 180,
+            "limit": 50
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "auth-service",
+            "since_minutes": 180,
+            "limit": 50
+          }
+        },
+        {
+          "name": "describe_k8s_resource",
+          "input": {
+            "kind": "Deployment",
+            "name": "api-gateway",
+            "namespace": "prod"
+          }
+        },
+        {
+          "name": "list_remediation_actions",
+          "input": {}
+        },
+        {
+          "name": "search_runbook",
+          "input": {
+            "query": "Rollback api-gateway v9.1.0 synchronous geoip lookup bad release P1 exact rollback_deploy parameters last known good version",
+            "limit": 5
+          }
+        },
+        {
+          "name": "search_runbook",
+          "input": {
+            "query": "api-gateway v9.1.0 event loop blocked geoip_lookup remediation disable GEOIP_ENABLED or rollback release",
+            "limit": 5
+          }
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "api-gateway",
+            "since_minutes": 1440
+          }
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "api-gateway",
+            "since_minutes": 10080
+          }
+        },
+        {
+          "name": "request_remediation",
+          "input": {
+            "action_id": "disable_feature_flag",
+            "action_params": {
+              "flag": "GEOIP_ENABLED"
+            },
+            "reason": "P1 gateway queue growth is caused by api-gateway v9.1.0's new synchronous geoip_lookup blocking each event-loop worker while waiting for a healthy ~390 ms dependency response. Disabling GEOIP_ENABLED removes the blocking call and restores the prior request path; scaling would not fix event-loop blocking, and retained deploy history does not expose a safe prior version for rollback."
+          }
+        },
+        {
+          "name": "propose_remediation",
+          "input": {
+            "action_id": "disable_feature_flag",
+            "action_params": {
+              "flag": "GEOIP_ENABLED"
+            },
+            "confidence": 0.98,
+            "justification": "This directly removes the blocking call introduced by v9.1.0. RB-033 states that adding replicas does not fix synchronous calls blocking an async event loop. A timeout increase would lengthen blocking, auth is healthy, GeoIP has no errors, and the Deployment has all 12 replicas ready, so capacity, auth, dependency outage, and pod-loss remedies do not address the cause.",
+            "root_cause": "api-gateway v9.1.0 deployed at 2026-09-14T13:18Z added a per-request synchronous GeoIP client. The geoip-service remained healthy (p99 388-396 ms, zero 5xx), but each 390 ms synchronous lookup blocked the gateway's four event-loop workers. Gateway event_loop_lag_ms rose from 3-4 ms to 410 ms by 13:32 and 970 ms at the alert, while CPU fell from 48% to 14% and completed throughput fell from 4,180 to 620 req/s. Requests therefore accumulated from 18 to 5,000 in the queue, producing the eight-minute queue-depth alert and client timeouts. Gateway logs explicitly reported event-loop blocking in geoip_lookup (1,200 occurrences at 412 ms and 5,400 at 980 ms); auth stayed at 13-14 ms p99 and all 12 gateway replicas remained ready."
+          }
+        }
+      ],
+      "tool_call_count": 22,
+      "read_tool_calls": 20,
+      "turns": 9,
+      "final_text": "## Diagnosis\n\n**Root cause:** `api-gateway` release **v9.1.0**, deployed at **13:18Z**, added a **synchronous GeoIP lookup** to every request. The normal ~390 ms GeoIP response blocks each gateway event-loop worker, drastically reducing request processing capacity.\n\n### Evidence\n\n- Gateway event-loop lag increased from **3\u20134 ms to 970 ms**.\n- CPU fell from **48% to 14%**, inconsistent with CPU saturation.\n- Completed throughput dropped from **4,180 to 620 req/s**.\n- Request queue grew from **18 to 5,000**.\n- Logs recorded:\n  - `event loop blocked for 412ms in geoip_lookup` \u2014 1,200 occurrences\n  - `event loop blocked for 980ms in geoip_lookup` \u2014 5,400 occurrences\n- GeoIP remained healthy:\n  - p99 latency stable at **388\u2013396 ms**\n  - **zero 5xx errors**\n- Auth remained healthy at **13\u201314 ms p99**.\n- All **12 gateway replicas** were ready, with no restarts or rollout events.\n\nThis matches runbook **RB-033**: a synchronous dependency call is blocking the async event loop. Scaling, raising timeouts, or changing GeoIP capacity would not address the cause.\n\n## Remediation\n\nQueued for human approval:\n\n- **Change request:** `CR-0a6398aa`\n- **Action:** Disable `GEOIP_ENABLED`\n- **State:** Pending approval; nothing has been applied yet\n\nDisabling GeoIP removes the newly introduced blocking call and restores the previous request path.",
+      "elapsed_s": 140.39,
+      "input_tokens": 16104,
+      "output_tokens": 4361,
+      "cache_read_tokens": 67968,
+      "cost_usd": 0.0,
+      "error": null,
+      "error_kind": null
+    },
+    {
+      "scenario_id": "SC-006",
+      "scenario_title": "Config push points notification service at the staging SMTP relay",
+      "model": "nex-agi/nex-n2.5-pro:free",
+      "proposal": {
+        "root_cause": "The 09:08 config-only push config-2026091502 changed notification-service's production SMTP_HOST from the confirmed prior value smtp-relay.prod.internal to smtp-relay.staging.internal. The pods reloaded that value at 09:08, so production mail was offered to the staging relay. That relay did not authorize the production sender domain and returned SMTP 550 relay access denied (7,500 logged errors across the 09:10 and 09:25 samples). Repeated rejection drove email delivery success from 99.3% at 09:00 to 88% at 09:08, 4% at 09:20, and 2% at 09:30. This is not relay or notification-service capacity exhaustion: smtp-relay had no error/warn logs or recent deploy, its CPU fell from 14% to 4%, queue depth fell from 88 to 41, notification-service CPU stayed 19-22%, and push delivery remained 99.8%.",
+        "action_id": "revert_config_change",
+        "justification": "Revert only notification-service-config/SMTP_HOST to smtp-relay.prod.internal. This removes the cross-environment pointer identified in the ConfigMap and restores the endpoint proven by the 09:05 successful-mail log immediately before the failure. It directly reverses the causative change without altering retry behavior or scaling healthy infrastructure. Change request CR-5af66831 is queued for human approval and has not been applied.",
+        "confidence": 0.99,
+        "action_params": {
+          "target": "notification-service-config/SMTP_HOST",
+          "previous_value": "smtp-relay.prod.internal"
+        }
+      },
+      "change_requests": [
+        {
+          "action_id": "revert_config_change",
+          "action_params": {
+            "target": "notification-service-config/SMTP_HOST",
+            "previous_value": "smtp-relay.prod.internal"
+          },
+          "reason": "Restore the confirmed production SMTP endpoint. At 09:08 config-2026091502 changed SMTP_HOST from smtp-relay.prod.internal to smtp-relay.staging.internal; immediately afterward notification-service logged SMTP 550 relay access denied and email success fell to 2%. The production relay is healthy (no errors, CPU 4%, queue 41 vs 88 earlier), push remains 99.8%, and notification CPU is normal, so this is a cross-environment config pointer rather than relay or application saturation. Reverting only SMTP_HOST directly addresses the cause with minimal scope."
+        }
+      ],
+      "tool_calls": [
+        {
+          "name": "list_services",
+          "input": {}
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "notification-service",
+            "since_minutes": 360
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "notification-service",
+            "level": "ERROR",
+            "since_minutes": 60,
+            "limit": 100
+          }
+        },
+        {
+          "name": "list_metrics",
+          "input": {
+            "service": "notification-service"
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "notification-service",
+            "since_minutes": 120
+          }
+        },
+        {
+          "name": "list_metrics",
+          "input": {
+            "service": "smtp-relay"
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "smtp-relay",
+            "level": "ERROR",
+            "since_minutes": 120,
+            "limit": 100
+          }
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "smtp-relay",
+            "since_minutes": 360
+          }
+        },
+        {
+          "name": "describe_k8s_resource",
+          "input": {
+            "kind": "Deployment",
+            "name": "notification-service",
+            "namespace": "prod"
+          }
+        },
+        {
+          "name": "describe_k8s_resource",
+          "input": {
+            "kind": "Deployment",
+            "name": "smtp-relay",
+            "namespace": "prod"
+          }
+        },
+        {
+          "name": "search_runbook",
+          "input": {
+            "query": "notification-service email delivery SMTP 550 relay access denied sender domain after SMTP host configuration change",
+            "limit": 5
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "smtp-relay",
+            "since_minutes": 120
+          }
+        },
+        {
+          "name": "describe_k8s_resource",
+          "input": {
+            "kind": "ConfigMap",
+            "name": "notification-service-config",
+            "namespace": "prod"
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "smtp-relay",
+            "level": "WARN",
+            "since_minutes": 120,
+            "limit": 100
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "notification-service",
+            "level": "WARN",
+            "since_minutes": 120,
+            "limit": 100
+          }
+        },
+        {
+          "name": "list_remediation_actions",
+          "input": {}
+        },
+        {
+          "name": "search_runbook",
+          "input": {
+            "query": "rollback config-only push notification-service SMTP host wrong environment pre-approved rollback action",
+            "limit": 5
+          }
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "notification-service",
+            "since_minutes": 1440
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "notification-service",
+            "pattern": "(?i)smtp",
+            "since_minutes": 1440,
+            "limit": 100
+          }
+        },
+        {
+          "name": "search_runbook",
+          "input": {
+            "query": "What is the correct production SMTP host for notification-service smtp-relay?",
+            "limit": 5
+          }
+        },
+        {
+          "name": "request_remediation",
+          "input": {
+            "action_id": "revert_config_change",
+            "action_params": {
+              "target": "notification-service-config/SMTP_HOST",
+              "previous_value": "smtp-relay.prod.internal"
+            },
+            "reason": "Restore the confirmed production SMTP endpoint. At 09:08 config-2026091502 changed SMTP_HOST from smtp-relay.prod.internal to smtp-relay.staging.internal; immediately afterward notification-service logged SMTP 550 relay access denied and email success fell to 2%. The production relay is healthy (no errors, CPU 4%, queue 41 vs 88 earlier), push remains 99.8%, and notification CPU is normal, so this is a cross-environment config pointer rather than relay or application saturation. Reverting only SMTP_HOST directly addresses the cause with minimal scope."
+          }
+        },
+        {
+          "name": "propose_remediation",
+          "input": {
+            "root_cause": "The 09:08 config-only push config-2026091502 changed notification-service's production SMTP_HOST from the confirmed prior value smtp-relay.prod.internal to smtp-relay.staging.internal. The pods reloaded that value at 09:08, so production mail was offered to the staging relay. That relay did not authorize the production sender domain and returned SMTP 550 relay access denied (7,500 logged errors across the 09:10 and 09:25 samples). Repeated rejection drove email delivery success from 99.3% at 09:00 to 88% at 09:08, 4% at 09:20, and 2% at 09:30. This is not relay or notification-service capacity exhaustion: smtp-relay had no error/warn logs or recent deploy, its CPU fell from 14% to 4%, queue depth fell from 88 to 41, notification-service CPU stayed 19-22%, and push delivery remained 99.8%.",
+            "action_id": "revert_config_change",
+            "justification": "Revert only notification-service-config/SMTP_HOST to smtp-relay.prod.internal. This removes the cross-environment pointer identified in the ConfigMap and restores the endpoint proven by the 09:05 successful-mail log immediately before the failure. It directly reverses the causative change without altering retry behavior or scaling healthy infrastructure. Change request CR-5af66831 is queued for human approval and has not been applied.",
+            "confidence": 0.99,
+            "action_params": {
+              "target": "notification-service-config/SMTP_HOST",
+              "previous_value": "smtp-relay.prod.internal"
+            }
+          }
+        }
+      ],
+      "tool_call_count": 22,
+      "read_tool_calls": 20,
+      "turns": 7,
+      "final_text": "## Diagnosis\n\n**Root cause:** A config-only push at **09:08 UTC** changed production `SMTP_HOST` from:\n\n`smtp-relay.prod.internal` \u2192 `smtp-relay.staging.internal`\n\nProduction email was then sent through the staging relay, which rejected the sender domain with **SMTP 550 relay access denied**.\n\n### Evidence\n\n- Email success fell immediately after the reload:\n  - **99.3% at 09:00**\n  - **88% at 09:08**\n  - **4% at 09:20**\n  - **2% at 09:30**\n- The last successful email at 09:05 used `smtp-relay.prod.internal`.\n- The ConfigMap reloaded at 09:08 with the staging host.\n- Notification-service logged **7,500 SMTP 550 errors** across two samples.\n- Push remained healthy at **99.8%**.\n- Notification-service CPU remained normal at **19\u201322%**.\n- SMTP relay CPU was only **4%**, queue depth decreased from **88 to 41**, and the relay had no errors or recent deployment.\n\nThis is a cross-environment configuration error, not relay saturation or notification-service resource exhaustion.\n\n## Remediation\n\nQueued change request **CR-5af66831** to revert only:\n\n`notification-service-config/SMTP_HOST` \u2192 `smtp-relay.prod.internal`\n\nThe request is **pending human approval** and has not been applied. Approval command:\n\n```text\nops-copilot approve CR-5af66831\n```",
+      "elapsed_s": 111.88,
+      "input_tokens": 20718,
+      "output_tokens": 3806,
+      "cache_read_tokens": 36736,
+      "cost_usd": 0.0,
+      "error": null,
+      "error_kind": null
+    },
+    {
+      "scenario_id": "SC-007",
+      "scenario_title": "Feature flag rollout turns one query into an N+1 against the orders table",
+      "model": "nex-agi/nex-n2.5-pro:free",
+      "proposal": {
+        "action_id": "disable_feature_flag",
+        "action_params": {
+          "flag": "orders_enrich_line_items"
+        },
+        "confidence": 0.99,
+        "justification": "This directly removes the newly enabled per-line-item query loop identified by the N+1 runbook. It restores the known-good request path without a full rollback and avoids scaling or enlarging the database pool, which would preserve or worsen the unnecessary query fan-out. The low-risk change request CR-fe48a02f is queued for human approval.",
+        "root_cause": "orders-api v11.4.0 was deployed at 2026-09-15T13:45:00Z with line-item enrichment behind orders_enrich_line_items. The flag rolled out at 5% at 15:35, 50% at 16:05, and 100% at 16:27. Enrichment performs an individual SELECT on line_items for each line item (the same 4.1 ms statement appeared 920,000 times), creating an N+1 query pattern. As rollout increased, db_queries_per_request rose from 3 to 470 and PostgreSQL queries_per_s rose from 2,600 to 408,000, while inbound request rate remained flat at 870-880 req/s and mean query duration stayed 3.9-4.1 ms. The resulting database CPU rose to 88% and accumulated per-request round trips raised orders-api p95 latency from 180 ms to 3,100 ms; larger accounts issue more line-item lookups and are therefore worst affected. This is application query amplification introduced by the feature flag, not PostgreSQL connection exhaustion (188/400), a slow individual query, orders-api CPU saturation (41%), or a traffic surge."
+      },
+      "change_requests": [
+        {
+          "action_id": "disable_feature_flag",
+          "action_params": {
+            "flag": "orders_enrich_line_items"
+          },
+          "reason": "P1 Orders API latency is causally aligned with rollout of orders_enrich_line_items and its N+1 line-item lookup pattern. Evidence: db_queries_per_request rose from 3 to 470, PostgreSQL QPS from 2,600 to 408,000, and p95 latency from 180 ms to 3,100 ms while request rate stayed ~870-880 req/s and mean DB query duration stayed 3.9-4.1 ms. Disabling only this new flag removes the query fan-out, restores the prior request path, and relieves PostgreSQL CPU without a full service rollback."
+        }
+      ],
+      "tool_calls": [
+        {
+          "name": "list_services",
+          "input": {}
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "service": "orders-api",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "get_recent_deploys",
+          "input": {
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "list_metrics",
+          "input": {
+            "service": "orders-api"
+          }
+        },
+        {
+          "name": "list_metrics",
+          "input": {
+            "service": "postgres-primary"
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "orders-api",
+            "pattern": "enrich|line.item|large.account|timeout|postgres|database",
+            "since_minutes": 180,
+            "limit": 100
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "postgres-primary",
+            "pattern": "slow|timeout|connection|lock|deadlock|cpu|memory|enrich|line_item",
+            "since_minutes": 180,
+            "limit": 100
+          }
+        },
+        {
+          "name": "describe_k8s_resource",
+          "input": {
+            "kind": "Deployment",
+            "name": "orders-api"
+          }
+        },
+        {
+          "name": "describe_k8s_resource",
+          "input": {
+            "kind": "StatefulSet",
+            "name": "postgres-primary"
+          }
+        },
+        {
+          "name": "search_runbook",
+          "input": {
+            "query": "Orders API p95 latency high after v11.4.0, worse for large accounts; line-item enrichment feature flag; PostgreSQL dependency",
+            "limit": 5
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "orders-api",
+            "metric": "http_p95_latency_ms",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "orders-api",
+            "metric": "db_queries_per_request",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "orders-api",
+            "metric": "requests_per_s",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "orders-api",
+            "metric": "cpu_utilisation",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "postgres-primary",
+            "metric": "queries_per_s",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "postgres-primary",
+            "metric": "mean_query_duration_ms",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "postgres-primary",
+            "metric": "active_connections",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "postgres-primary",
+            "metric": "max_connections",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "get_metrics",
+          "input": {
+            "service": "postgres-primary",
+            "metric": "cpu_utilisation",
+            "since_minutes": 180
+          }
+        },
+        {
+          "name": "list_remediation_actions",
+          "input": {}
+        },
+        {
+          "name": "search_runbook",
+          "input": {
+            "query": "disable feature flag orders_enrich_line_items immediately during Orders API latency incident",
+            "limit": 5
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "orders-api",
+            "level": "ERROR",
+            "since_minutes": 180,
+            "limit": 100
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "postgres-primary",
+            "level": "ERROR",
+            "since_minutes": 180,
+            "limit": 100
+          }
+        },
+        {
+          "name": "query_logs",
+          "input": {
+            "service": "orders-api",
+            "level": "WARN",
+            "since_minutes": 180,
+            "limit": 100
+          }
+        },
+        {
+          "name": "request_remediation",
+          "input": {
+            "action_id": "disable_feature_flag",
+            "action_params": {
+              "flag": "orders_enrich_line_items"
+            },
+            "reason": "P1 Orders API latency is causally aligned with rollout of orders_enrich_line_items and its N+1 line-item lookup pattern. Evidence: db_queries_per_request rose from 3 to 470, PostgreSQL QPS from 2,600 to 408,000, and p95 latency from 180 ms to 3,100 ms while request rate stayed ~870-880 req/s and mean DB query duration stayed 3.9-4.1 ms. Disabling only this new flag removes the query fan-out, restores the prior request path, and relieves PostgreSQL CPU without a full service rollback."
+          }
+        },
+        {
+          "name": "propose_remediation",
+          "input": {
+            "action_id": "disable_feature_flag",
+            "action_params": {
+              "flag": "orders_enrich_line_items"
+            },
+            "confidence": 0.99,
+            "justification": "This directly removes the newly enabled per-line-item query loop identified by the N+1 runbook. It restores the known-good request path without a full rollback and avoids scaling or enlarging the database pool, which would preserve or worsen the unnecessary query fan-out. The low-risk change request CR-fe48a02f is queued for human approval.",
+            "root_cause": "orders-api v11.4.0 was deployed at 2026-09-15T13:45:00Z with line-item enrichment behind orders_enrich_line_items. The flag rolled out at 5% at 15:35, 50% at 16:05, and 100% at 16:27. Enrichment performs an individual SELECT on line_items for each line item (the same 4.1 ms statement appeared 920,000 times), creating an N+1 query pattern. As rollout increased, db_queries_per_request rose from 3 to 470 and PostgreSQL queries_per_s rose from 2,600 to 408,000, while inbound request rate remained flat at 870-880 req/s and mean query duration stayed 3.9-4.1 ms. The resulting database CPU rose to 88% and accumulated per-request round trips raised orders-api p95 latency from 180 ms to 3,100 ms; larger accounts issue more line-item lookups and are therefore worst affected. This is application query amplification introduced by the feature flag, not PostgreSQL connection exhaustion (188/400), a slow individual query, orders-api CPU saturation (41%), or a traffic surge."
+          }
+        }
+      ],
+      "tool_call_count": 26,
+      "read_tool_calls": 24,
+      "turns": 7,
+      "final_text": "## Diagnosis\n\n**Root cause:** an **N+1 query regression** introduced by `orders_enrich_line_items` in `orders-api v11.4.0`.\n\n### Evidence\n\n- `v11.4.0` deployed at 13:45Z, adding line-item enrichment.\n- Flag rollout:\n  - 5% at 15:35Z\n  - 50% at 16:05Z\n  - 100% at 16:27Z\n- Orders API p95 rose in lockstep: **180 ms \u2192 980 ms \u2192 2,600 ms \u2192 3,100 ms**.\n- Database queries per request rose **3 \u2192 14 \u2192 190 \u2192 470**.\n- PostgreSQL QPS rose **2,600 \u2192 12,000 \u2192 408,000**.\n- PostgreSQL logged the same line-item lookup **920,000 times**, each taking only about **4.1 ms**.\n- Incoming traffic stayed flat at roughly **870\u2013880 req/s**, and orders-api CPU was only **41%**, ruling out a traffic surge or application CPU saturation.\n- PostgreSQL CPU reached **88%** as a consequence of query amplification, but mean query duration stayed flat and connections were only **188/400**, ruling out an intrinsically slow database or connection exhaustion.\n- Large accounts have more line items, so they trigger more per-item lookups and experience the worst latency.\n\n## Remediation\n\nQueued for human approval:\n\n- **Action:** Disable `orders_enrich_line_items` for all traffic\n- **Change request:** `CR-fe48a02f`\n- **State:** Pending\n- **Approval command:** `ops-copilot approve CR-fe48a02f`\n\nThis directly removes the faulty query fan-out and should relieve both API latency and downstream PostgreSQL CPU pressure. Nothing has been applied yet.",
+      "elapsed_s": 113.91,
+      "input_tokens": 15528,
+      "output_tokens": 4845,
+      "cache_read_tokens": 42944,
+      "cost_usd": 0.0,
+      "error": null,
+      "error_kind": null
+    }
+  ]
+}

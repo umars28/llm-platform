@@ -1,0 +1,27 @@
+[project]
+name = "llm-eval-harness"
+version = "0.1.0"
+description = "A regression gate for LLM systems: deterministic assertions first, an LLM judge only where they cannot reach, with cost and latency budgets enforced in CI."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Umar Sabirin" }]
+dependencies = ["anthropic>=1.6", "pyyaml>=6.0"]
+
+[project.scripts]
+llm-eval = "llm_eval.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/llm_eval"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["live: needs a real API call"]
