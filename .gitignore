@@ -9,3 +9,4 @@ apps/llm-gateway/.venv/
 deploy/terraform/.terraform/
 deploy/terraform/tfplan
 deploy/terraform/*.tfstate*
+deploy/.rules-check.yaml

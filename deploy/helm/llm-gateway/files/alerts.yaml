@@ -1,0 +1,148 @@
+# Alerts, written against the SLOs rather than against whatever is convenient to
+# measure. Each one names what a responder should do, because an alert that does
+# not is a notification.
+#
+# Two rules this file follows:
+#
+#   Alert on symptoms, not causes. "Error budget burning" pages; "a provider's
+#   breaker opened" does not, because failover means the second one may have no
+#   user-visible effect at all. Paging on causes is how a rotation learns to
+#   ignore the pager.
+#
+#   Multi-window burn rate, not a fixed threshold. "Error rate above 1%" fires
+#   on a thirty-second blip and misses a slow bleed that exhausts the month.
+#   Burn rate asks the only question that matters: at this rate, when does the
+#   budget run out?
+
+groups:
+  - name: llm-gateway-slo
+    rules:
+      # --- SLI definitions ------------------------------------------------
+      # Recorded so every alert and dashboard reads the same numbers. Defining
+      # the ratio inline in each alert is how two alerts end up disagreeing.
+
+      - record: gateway:availability:ratio_rate5m
+        expr: |
+          sum(rate(gateway_requests_total{status=~"2.."}[5m]))
+          /
+          clamp_min(sum(rate(gateway_requests_total[5m])), 1e-9)
+
+      - record: gateway:availability:ratio_rate1h
+        expr: |
+          sum(rate(gateway_requests_total{status=~"2.."}[1h]))
+          /
+          clamp_min(sum(rate(gateway_requests_total[1h])), 1e-9)
+
+      - record: gateway:availability:ratio_rate6h
+        expr: |
+          sum(rate(gateway_requests_total{status=~"2.."}[6h]))
+          /
+          clamp_min(sum(rate(gateway_requests_total[6h])), 1e-9)
+
+      # Latency SLI excludes denials on purpose: a 402 returns in microseconds
+      # and would flatter the number while the service is refusing everyone.
+      - record: gateway:latency:p95_5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(gateway_request_duration_seconds_bucket[5m]))
+          )
+
+      # --- availability burn ----------------------------------------------
+      # SLO 99.5% over 30 days: a 0.5% error budget.
+
+      - alert: GatewayErrorBudgetBurningFast
+        # 14.4x burn exhausts a 30-day budget in ~2 days. The short window is
+        # required alongside the long one so the alert resolves quickly once the
+        # incident ends, instead of holding the pager for an hour.
+        expr: |
+          (1 - gateway:availability:ratio_rate1h) > (14.4 * 0.005)
+          and
+          (1 - gateway:availability:ratio_rate5m) > (14.4 * 0.005)
+        for: 2m
+        labels:
+          severity: page
+          slo: availability
+        annotations:
+          summary: "Gateway error budget burning 14x: {{ $value | humanizePercentage }} of requests failing"
+          description: >-
+            At this rate the 30-day error budget is gone in about two days.
+            Check /readyz on a pod for provider breaker state and quota store
+            health, then `kubectl logs -l app.kubernetes.io/name=llm-gateway |
+            jq 'select(.level=="error")'` for the failing request ids.
+          runbook: "deploy/RUNBOOK.md#error-budget-burning"
+
+      - alert: GatewayErrorBudgetBurningSlow
+        # 6x burn exhausts the budget in ~5 days. A ticket, not a page: it needs
+        # attention this week, not at three in the morning.
+        expr: |
+          (1 - gateway:availability:ratio_rate6h) > (6 * 0.005)
+          and
+          (1 - gateway:availability:ratio_rate1h) > (6 * 0.005)
+        for: 15m
+        labels:
+          severity: ticket
+          slo: availability
+        annotations:
+          summary: "Gateway error budget burning 6x over six hours"
+          runbook: "deploy/RUNBOOK.md#error-budget-burning"
+
+      # --- latency --------------------------------------------------------
+
+      - alert: GatewayLatencyHigh
+        expr: gateway:latency:p95_5m > 30
+        for: 10m
+        labels:
+          severity: ticket
+          slo: latency
+        annotations:
+          summary: "Gateway p95 is {{ $value | humanizeDuration }}, over the 30s objective"
+          description: >-
+            Usually an upstream provider slowing rather than the gateway.
+            Compare gateway_request_duration_seconds against the per-provider
+            mean latency in /readyz before touching the gateway itself.
+          runbook: "deploy/RUNBOOK.md#latency-high"
+
+      # --- the failure modes with no user-visible symptom yet --------------
+      # These do not page. They are the ones that become an incident later.
+
+      - alert: GatewayAllProvidersFailing
+        # This one does page: failover has nowhere left to go.
+        expr: sum(rate(gateway_upstream_failures_total[5m])) > 0
+        for: 3m
+        labels:
+          severity: page
+        annotations:
+          summary: "Every provider failed for at least one request"
+          description: >-
+            Failover exhausted the chain. Check whether both providers are
+            genuinely down or whether a credential expired -- a 401 is not a
+            provider fault and will not open a breaker, so a rotated key looks
+            like every request failing while every breaker stays closed.
+          runbook: "deploy/RUNBOOK.md#all-providers-failing"
+
+      - alert: GatewayQuotaStoreUnavailable
+        # Budgets fail closed, so this becomes a total outage the moment any
+        # tenant's next request arrives.
+        expr: kube_pod_container_status_ready{container="gateway"} == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Gateway pods not ready for five minutes"
+          description: >-
+            Readiness covers provider health and the quota store. If the store
+            is unreachable every budget check fails closed, which means 402 for
+            every tenant.
+          runbook: "deploy/RUNBOOK.md#quota-store-down"
+
+      - alert: GatewayTenantNearBudget
+        # Not an outage. A warning to the team that owns the budget, sent before
+        # their traffic starts failing rather than after.
+        expr: gateway_budget_utilisation > 0.9
+        for: 30m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Tenant {{ $labels.tenant }} has used {{ $value | humanizePercentage }} of its budget"
+          runbook: "deploy/RUNBOOK.md#tenant-near-budget"
