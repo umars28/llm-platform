@@ -13,6 +13,17 @@ RUN uv venv /opt/venv \
 
 FROM python:3.12-slim AS runtime
 
+# Patch the base image's OS packages. python:3.12-slim ships whatever Debian
+# had when the tag was built, and Trivy failed this build on a CRITICAL in
+# perl-base and a HIGH in libpcre2 that both had fixes available upstream.
+# This trades byte-for-byte reproducibility for being patched, which is the
+# right way round for an image holding provider credentials. Neither this nor
+# the Python install above is pinned, so the image is not reproducible by
+# digest -- see the README for what that costs.
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
+
 # A non-root user, and a read-only-friendly layout. Running as root in a
 # container is the default and is worth the thirty seconds it takes to undo.
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin gateway
