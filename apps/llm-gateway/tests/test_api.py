@@ -236,7 +236,7 @@ def test_readiness_reports_whether_quota_is_shared():
 def test_readiness_fails_when_the_quota_store_is_unreachable():
     """Budgets fail closed, so serving would mean 402 for everyone."""
     from llm_gateway.store import RedisStore
-    from tests.test_store import BrokenRedis
+    from conftest import BrokenRedis
 
     app = create_app(CONFIG, FakeUpstream(ok_result()))
     app.state.policy.store = RedisStore("", client=BrokenRedis())

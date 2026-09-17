@@ -7,6 +7,8 @@ import pytest
 from llm_gateway.policy import PolicyEngine, Tenant
 from llm_gateway.store import MemoryStore, RedisStore, build_store
 
+from conftest import BrokenRedis
+
 
 def replica(store) -> PolicyEngine:
     return PolicyEngine(
@@ -114,20 +116,6 @@ def test_a_rate_denial_gives_the_budget_reservation_back():
 
 
 # -- redis behaviour under failure --------------------------------------
-
-class BrokenRedis:
-    """A client whose every call fails, to pin down the failure policy."""
-
-    def register_script(self, _src):
-        def script(keys=None, args=None):
-            raise ConnectionError("redis is gone")
-        return script
-
-    def __getattr__(self, _name):
-        def fail(*a, **k):
-            raise ConnectionError("redis is gone")
-        return fail
-
 
 def test_budget_fails_closed_when_the_store_is_unreachable():
     """A budget that lifts itself when its store is down is not a budget."""
