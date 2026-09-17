@@ -49,7 +49,19 @@ CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw
 @contextmanager
 def connect(dsn: str = DSN) -> Iterator[psycopg.Connection]:
     with psycopg.connect(dsn, autocommit=True) as conn:
-        register_vector(conn)
+        try:
+            register_vector(conn)
+        except psycopg.ProgrammingError:
+            # An empty database could not be bootstrapped: registering the
+            # vector type needs the extension, and init_schema -- the only
+            # thing that creates it -- connects through here as well. This
+            # never showed up against a developer database that had held the
+            # extension for months; it failed on the first genuinely fresh one.
+            # Creating it here rather than in init_schema keeps the recovery on
+            # the path that actually hits the problem, and the retry means the
+            # privileged DDL is only attempted when the type is really absent.
+            conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            register_vector(conn)
         yield conn
 
 
