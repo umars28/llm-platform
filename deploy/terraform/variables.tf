@@ -21,22 +21,21 @@ variable "release_name" {
   default = "gw"
 }
 
+variable "provider_secret_name" {
+  description = "Secret holding upstream credentials. Created out of band so its contents never enter Terraform state; see the README."
+  type        = string
+  default     = "llm-gateway-providers"
+}
+
 variable "image_tag" {
   description = "Image tag to deploy. Never 'latest': a mutable tag makes a node reschedule into an unannounced rollout."
   type        = string
-  default     = "0.1.0"
+  default     = "0.4.0"
 
   validation {
     condition     = var.image_tag != "latest"
     error_message = "Refusing 'latest'. Pin a tag or a digest so a reschedule cannot roll out an unreleased build."
   }
-}
-
-variable "provider_api_keys" {
-  description = "Upstream credentials, keyed by the env var the gateway reads. Supplied at apply time; never written to a tfvars file in the repository."
-  type        = map(string)
-  sensitive   = true
-  default     = {}
 }
 
 variable "replicas" {

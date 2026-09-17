@@ -10,19 +10,22 @@ resource "kubernetes_namespace" "platform" {
   }
 }
 
-resource "kubernetes_secret" "providers" {
-  metadata {
-    name      = "llm-gateway-providers"
-    namespace = kubernetes_namespace.platform.metadata[0].name
-  }
-
-  # Keys arrive from the environment at apply time. Putting them in a tfvars
-  # file in the repository is the mistake this variable exists to avoid --
-  # though note they are still stored in plain text in Terraform state, which is
-  # why state belongs in an encrypted backend rather than on a laptop.
-  data = var.provider_api_keys
-  type = "Opaque"
-}
+# Provider credentials are referenced by name and never read.
+#
+# Terraform writes every managed attribute to state, and `sensitive` hides a
+# value from console output rather than from the state file. Encrypting the
+# backend narrows who can read state; it does not stop the secret being written
+# down.
+#
+# A `data "kubernetes_secret"` block does not help either, which is worth
+# stating because it looks like it should: a data source persists what it reads,
+# so reading the secret to check it exists put the credential in state in both
+# plain text and base64. Verified by grepping the state file, not assumed.
+#
+# So the name is a string and nothing here ever touches the value. The cost is
+# that a missing secret is not caught at plan time -- the pods fail to start and
+# `atomic = true` rolls the release back, which is a worse error message for a
+# better property.
 
 resource "helm_release" "gateway" {
   name      = var.release_name
@@ -31,7 +34,8 @@ resource "helm_release" "gateway" {
 
   # Wait for readiness rather than reporting success at the moment the objects
   # are accepted. An apply that goes green while the pods crashloop is worse
-  # than one that fails.
+  # than one that fails -- this caught a missing dependency in the image and
+  # rolled back before it replaced a working release.
   wait          = true
   atomic        = true
   timeout       = 300
@@ -49,8 +53,6 @@ resource "helm_release" "gateway" {
 
   set {
     name  = "providerSecret.name"
-    value = kubernetes_secret.providers.metadata[0].name
+    value = var.provider_secret_name
   }
-
-  depends_on = [kubernetes_secret.providers]
 }
