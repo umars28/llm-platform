@@ -191,3 +191,34 @@ def test_provider_side_failures_are_worth_failing_over(status):
 def test_caller_side_failures_are_not(status):
     """Failing over a 400 turns one clear error into three slow ones."""
     assert not is_provider_fault(status)
+
+
+# -- malformed input ---------------------------------------------------
+
+def test_a_malformed_body_is_400_not_500():
+    """A 500 here pages the gateway's owner for somebody else's bad request."""
+    c = client(FakeUpstream(ok_result()))
+    r = c.post("/v1/messages", headers={"x-api-key": "k-plat", "content-type": "application/json"},
+               content=b"{not json")
+    assert r.status_code == 400
+    assert "not valid JSON" in r.json()["error"]["message"]
+
+
+def test_a_non_object_body_is_400():
+    c = client(FakeUpstream(ok_result()))
+    r = c.post("/v1/messages", headers={"x-api-key": "k-plat"}, json=["a", "list"])
+    assert r.status_code == 400
+
+
+def test_a_missing_model_is_400_rather_than_a_confusing_denial():
+    c = client(FakeUpstream(ok_result()))
+    r = c.post("/v1/messages", headers={"x-api-key": "k-plat"}, json={"max_tokens": 8})
+    assert r.status_code == 400
+    assert "model is required" in r.json()["error"]["message"]
+
+
+def test_a_bad_body_from_an_unknown_key_still_authenticates_first():
+    """Authentication before parsing: an unknown caller learns nothing about us."""
+    c = client(FakeUpstream(ok_result()))
+    r = c.post("/v1/messages", headers={"x-api-key": "nope"}, json={"model": "claude-opus-5"})
+    assert r.status_code == 401

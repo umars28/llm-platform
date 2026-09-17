@@ -98,8 +98,32 @@ def create_app(config: dict[str, Any] | None = None, upstream: Upstream | None =
     ) -> JSONResponse:
         started = time.perf_counter()
         key = x_api_key or (authorization or "").removeprefix("Bearer ").strip() or None
-        payload = await request.json()
+
+        # A malformed body is the caller's mistake and must not look like ours.
+        # Letting it raise produced a 500, which pages the gateway's owner for
+        # somebody else's bad request.
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse(
+                {"type": "error", "error": {
+                    "type": "invalid_request", "message": "body is not valid JSON"}},
+                status_code=400,
+            )
+        if not isinstance(payload, dict):
+            return JSONResponse(
+                {"type": "error", "error": {
+                    "type": "invalid_request", "message": "body must be a JSON object"}},
+                status_code=400,
+            )
+
         model = str(payload.get("model", ""))
+        if not model:
+            return JSONResponse(
+                {"type": "error", "error": {
+                    "type": "invalid_request", "message": "model is required"}},
+                status_code=400,
+            )
 
         estimated = estimate_usd(model, payload)
         decision, tenant = policy.admit(key, model, estimated)
