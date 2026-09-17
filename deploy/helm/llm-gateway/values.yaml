@@ -59,6 +59,16 @@ providerSecret:
   name: llm-gateway-providers
   create: false
 
+networkPolicy:
+  # Default-deny both ways, then allow only what the gateway and its quota
+  # store actually need. Redis has no password: the policy is what stops any
+  # pod in the cluster from reading or flushing every tenant's spend.
+  enabled: true
+  # Namespaces allowed to call the gateway, in addition to this one. Prometheus
+  # scraping lives here too -- add the monitoring namespace when the
+  # ServiceMonitor is on, or the scrape fails while the pod stays Ready.
+  allowedNamespaces: []
+
 podDisruptionBudget:
   enabled: true
   minAvailable: 1

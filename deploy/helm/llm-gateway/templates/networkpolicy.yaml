@@ -1,0 +1,101 @@
+{{- if .Values.networkPolicy.enabled }}
+# Default-deny for both pods, then the traffic each one actually needs.
+#
+# The quota store is the reason this matters most. Without a policy, any pod in
+# the cluster can reach Redis on 6379 and read every tenant's spend, or FLUSHALL
+# it -- and because budgets fail closed, flushing it is a cluster-wide outage
+# that looks like every tenant running out of money at once. Redis has no
+# authentication here; the network is the authentication.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}
+  labels: {{- include "llm-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "llm-gateway.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+
+  ingress:
+    # Callers live in the cluster; there is deliberately no ingress object, so
+    # nothing outside reaches a service holding provider credentials.
+    - from:
+        - podSelector: {}
+        {{- range .Values.networkPolicy.allowedNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.service.port }}
+          protocol: TCP
+
+  egress:
+    # DNS first. Every other rule here is written against names, and a policy
+    # that forgets 53 presents as every provider being unreachable.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+    {{- if .Values.redis.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "llm-gateway.name" . }}-redis
+      ports:
+        - port: 6379
+          protocol: TCP
+    {{- end }}
+
+    # Provider APIs over TLS. Private ranges are excluded rather than allowed:
+    # this pod has no reason to reach anything else inside the cluster, and
+    # leaving RFC1918 open turns an SSRF in a prompt into a way to scan it.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
+---
+{{- if .Values.redis.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-redis
+  labels: {{- include "llm-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "llm-gateway.name" . }}-redis
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # The gateway, and nothing else.
+    - from:
+        - podSelector:
+            matchLabels: {{- include "llm-gateway.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: 6379
+          protocol: TCP
+  egress:
+    # Redis serves; it does not call out. DNS only.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+{{- end }}
+{{- end }}

@@ -126,6 +126,16 @@ jobs:
           fi
           echo "guard held: refused two replicas without shared quota state"
 
+      - name: the network policy is actually rendered
+        # Default values must produce it. A chart that silently stops emitting
+        # a policy leaves the cluster open while every test still passes.
+        run: |
+          count=$(helm template gw deploy/helm/llm-gateway \
+                   | grep -c 'kind: NetworkPolicy' || true)
+          [ "$count" = "2" ] || {
+            echo "::error::expected 2 NetworkPolicies by default, rendered $count"; exit 1; }
+          echo "rendered $count network policies"
+
       - uses: opentofu/setup-opentofu@v1
       - name: terraform validate
         working-directory: deploy/terraform

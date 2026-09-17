@@ -115,3 +115,47 @@ def test_more_than_one_replica_requires_a_shared_quota_store():
     guard = (ROOT / "deploy/helm/llm-gateway/templates/_guard.tpl").read_text()
     assert "fail" in guard
     assert "once per replica" in guard
+
+
+# -- network policy ----------------------------------------------------
+
+NETPOL = ROOT / "deploy/helm/llm-gateway/templates/networkpolicy.yaml"
+
+
+def netpol_text() -> str:
+    return NETPOL.read_text()
+
+
+def test_both_pods_default_deny_in_and_out():
+    """A policy listing only ingress leaves egress wide open, and vice versa."""
+    text = netpol_text()
+    assert text.count("policyTypes: [Ingress, Egress]") == 2
+
+
+def test_redis_accepts_only_the_gateway():
+    """Redis has no password here, so the selector is the authentication.
+
+    The first version of this template rendered the gateway's labels directly
+    under `podSelector` with no `matchLabels`, which is not the same policy --
+    it is a selector Kubernetes cannot read on a rule that looks correct.
+    """
+    text = netpol_text()
+    redis_block = text.split("-redis\n", 1)[1]
+    ingress = redis_block.split("ingress:", 1)[1].split("egress:", 1)[0]
+    assert "podSelector:" in ingress
+    assert "matchLabels:" in ingress
+    assert "selectorLabels" in ingress
+
+
+def test_egress_to_the_cluster_is_not_reopened_by_the_internet_rule():
+    """0.0.0.0/0 without the private ranges excluded is a hole, not a rule."""
+    text = netpol_text()
+    assert "cidr: 0.0.0.0/0" in text
+    for private in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"):
+        assert private in text, f"{private} not excluded from egress"
+
+
+def test_dns_is_allowed_or_every_rule_below_it_is_dead():
+    """Every other egress rule resolves a name first."""
+    text = netpol_text()
+    assert text.count("port: 53") == 4  # udp+tcp, for both pods
