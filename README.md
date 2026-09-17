@@ -13,7 +13,7 @@ corpora live in `benchmarks/` so one harness scores all of them.
 
 | component | measured | result |
 | --- | --- | --- |
-| [llm-gateway](apps/llm-gateway) | deployed to Kubernetes, verified in-cluster | quota, failover, cost attribution, **running** |
+| [llm-gateway](apps/llm-gateway) | deployed to Kubernetes, measured in-cluster | **0 requests dropped** across a rollout; quota holds exactly across replicas |
 | [runbook-rag](apps/runbook-rag) | 70 labelled queries over 381 K8s doc pages | recall@5 **0.526 → 0.638**; hit@5 0.757 → 0.871 |
 | [ops-copilot](apps/ops-copilot) | 30 reproducible incident scenarios | root cause **96.7%** (29/30); strictly correct 93.3% |
 | [agent-guardrail](packages/agent-guardrail) | 40 attacks / 40 hard negatives, cross-validated | **68% detection at 0% false positives** (shippable layer) |
