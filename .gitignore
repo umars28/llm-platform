@@ -6,3 +6,6 @@ dist/
 .ruff_cache/
 uv.lock
 apps/llm-gateway/.venv/
+deploy/terraform/.terraform/
+deploy/terraform/tfplan
+deploy/terraform/*.tfstate*
