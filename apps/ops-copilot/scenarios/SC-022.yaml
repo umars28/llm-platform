@@ -1,0 +1,99 @@
+id: SC-022
+title: Load balancer health check path changes and drains every backend
+category: config-error
+alert:
+  name: PublicAPIUnavailable
+  severity: P1
+  service: public-api
+  fired_at: "2026-09-18T12:40:00Z"
+  description: >-
+    The public API load balancer reports 0 healthy targets. External traffic is
+    receiving 503. Pods are running and pass their own readiness probes.
+world:
+  services:
+    - {name: public-api, tier: 1, owner: platform-team, depends_on: [orders-api]}
+    - {name: orders-api, tier: 1, owner: commerce, depends_on: []}
+  deploys:
+    - t: -12
+      service: platform-ingress
+      version: "ingress-2026091801"
+      commit: 1f7a3d9
+      author: platform-bot
+      summary: "Standardise health check path to /healthz across all target groups"
+  logs:
+    public-api:
+      - {t: -30, level: INFO, msg: "GET /health 200 (elapsed=1ms, source=10.4.0.0/16)", count: 1800}
+      - {t: -10, level: WARN, msg: "GET /healthz 404 (source=10.4.0.0/16)", count: 2400}
+      - {t: -10, level: INFO, msg: "GET /orders 200 (elapsed=34ms)", count: 41000}
+      - {t: -2, level: INFO, msg: "GET /orders 200 (elapsed=33ms)", count: 900}
+    orders-api:
+      - {t: -30, level: INFO, msg: "GET /orders 200 (elapsed=12ms)", count: 44000}
+  metrics:
+    public-api:
+      healthy_targets:
+        unit: targets
+        points: [{t: -60, v: 14}, {t: -12, v: 14}, {t: -8, v: 6}, {t: -4, v: 0}, {t: 0, v: 0}]
+      external_5xx_rate:
+        unit: percent
+        points: [{t: -60, v: 0.1}, {t: -8, v: 58}, {t: 0, v: 100}]
+      internal_request_success_rate:
+        unit: percent
+        points: [{t: -60, v: 99.9}, {t: 0, v: 99.9}]
+      readiness_probe_success_rate:
+        unit: percent
+        points: [{t: -60, v: 100}, {t: 0, v: 100}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -60, v: 41}, {t: 0, v: 9}]
+    orders-api:
+      http_5xx_rate:
+        unit: errors/s
+        points: [{t: -60, v: 0.02}, {t: 0, v: 0.02}]
+  k8s:
+    - kind: Deployment
+      name: public-api
+      namespace: prod
+      spec:
+        replicas: 14
+        image: "registry.internal/public-api:v12.2.0"
+        readiness_probe: {path: "/health", port: 8080}
+      status: {readyReplicas: 14, restarts_last_hour: 0}
+      events: []
+    - kind: TargetGroup
+      name: public-api-tg
+      namespace: prod
+      spec: {health_check_path: "/healthz", healthy_threshold: 2, unhealthy_threshold: 2, interval_s: 10}
+      status: {healthy_targets: 0, total_targets: 14, last_applied: "ingress-2026091801"}
+      events:
+        - {t: -12, type: Normal, reason: ConfigApplied, msg: "Health check path changed from /health to /healthz"}
+        - {t: -4, type: Warning, reason: TargetsUnhealthy, msg: "14 of 14 targets failing health checks: HTTP 404"}
+  runbooks:
+    - id: RB-049
+      title: "Load balancer health checks"
+      tags: [load-balancer, health-check, readiness, targets, '503', ingress, drain]
+      body: >-
+        Pods passing their Kubernetes readiness probe while the load balancer
+        reports zero healthy targets means the two are checking different things.
+        Compare the readiness probe path against the target group health check
+        path. A 404 on the health check path drains every backend at once,
+        because the change applies to all of them simultaneously -- the blast
+        radius is total rather than gradual. The application is entirely healthy;
+        only the check is wrong.
+ground_truth:
+  root_cause: >-
+    The ingress config change standardised the target group health check path to
+    /healthz, but public-api serves its health endpoint at /health and returns
+    404 for /healthz. All 14 targets failed the check within two intervals and
+    the load balancer drained every one, returning 503 externally. The pods are
+    healthy: their readiness probe still uses /health at 100% success and
+    internal requests succeed at 99.9%.
+  must_include:
+    - ["health check", "healthz", "/health", "path"]
+    - ["load balancer", "target group", "targets", "drain", "404"]
+    - ["ingress", "config", "change", "mismatch", "readiness"]
+  must_not_include:
+    - ["public-api is down", "public-api crashed", "orders-api is the cause", "add more capacity"]
+  expected_actions: [revert_config_change, fix_monitoring_config]
+  red_herrings:
+    - "a total external outage reads as an application failure, though the application never stopped working"
+    - "public-api CPU collapsing to 9% looks like a dead service rather than a drained one"

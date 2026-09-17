@@ -1,0 +1,82 @@
+id: SC-028
+title: A spot node reclaim has already self-healed by the time the alert fires
+category: false-alarm
+alert:
+  name: BatchWorkerReplicasBelowTarget
+  severity: P3
+  service: batch-worker
+  fired_at: "2026-09-19T01:45:00Z"
+  description: >-
+    batch-worker ready replicas fell below the target of 20. The alert has a
+    15-minute evaluation window.
+world:
+  services:
+    - {name: batch-worker, tier: 3, owner: data-platform, depends_on: [job-queue]}
+    - {name: job-queue, tier: 1, owner: platform-team, depends_on: []}
+  deploys: []
+  logs:
+    batch-worker:
+      - {t: -24, level: WARN, msg: "received SIGTERM, draining (node=ip-10-4-8-91, reason=spot-reclaim)", count: 7}
+      - {t: -22, level: INFO, msg: "worker shutdown complete, 0 jobs lost", count: 7}
+      - {t: -18, level: INFO, msg: "worker started (node=ip-10-4-8-14)", count: 7}
+      - {t: -5, level: INFO, msg: "job complete (duration=8s)", count: 4400}
+    job-queue:
+      - {t: -24, level: INFO, msg: "queue depth for batch-worker: 610"}
+      - {t: -5, level: INFO, msg: "queue depth for batch-worker: 180"}
+  metrics:
+    batch-worker:
+      ready_replicas:
+        unit: pods
+        points: [{t: -60, v: 20}, {t: -24, v: 20}, {t: -22, v: 13}, {t: -18, v: 17}, {t: -14, v: 20}, {t: 0, v: 20}]
+      jobs_completed_per_min:
+        unit: jobs/min
+        points: [{t: -60, v: 880}, {t: -22, v: 560}, {t: -14, v: 870}, {t: 0, v: 890}]
+      job_failure_rate:
+        unit: percent
+        points: [{t: -60, v: 0.1}, {t: -22, v: 0.1}, {t: 0, v: 0.1}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -60, v: 61}, {t: -22, v: 40}, {t: 0, v: 63}]
+    job-queue:
+      queue_depth:
+        unit: jobs
+        points: [{t: -60, v: 190}, {t: -24, v: 610}, {t: -14, v: 320}, {t: 0, v: 180}]
+      enqueue_rate:
+        unit: jobs/min
+        points: [{t: -60, v: 870}, {t: 0, v: 880}]
+  k8s:
+    - kind: Deployment
+      name: batch-worker
+      namespace: prod
+      spec: {replicas: 20, image: "registry.internal/batch-worker:v3.2.1"}
+      status: {readyReplicas: 20, restarts_last_hour: 7}
+      events:
+        - {t: -24, type: Normal, reason: NodeTerminating, msg: "Node ip-10-4-8-91 (spot) reclaimed by cloud provider"}
+        - {t: -18, type: Normal, reason: Scheduled, msg: "7 pods rescheduled to ip-10-4-8-14"}
+        - {t: -14, type: Normal, reason: AllReplicasReady, msg: "Deployment batch-worker has 20/20 ready replicas"}
+    - kind: PrometheusRule
+      name: batch-worker-replicas
+      namespace: monitoring
+      spec: {expr: "kube_deployment_status_replicas_available{deployment='batch-worker'} < 20", for: "15m", severity: P3}
+      status: {fired_at_offset_minutes: 0, condition_cleared_minutes_ago: 14}
+      events: []
+  runbooks: []
+ground_truth:
+  root_cause: >-
+    A spot node, ip-10-4-8-91, was reclaimed by the cloud provider 24 minutes
+    ago. Its 7 batch-worker pods drained gracefully with zero jobs lost and were
+    rescheduled onto ip-10-4-8-14; the Deployment was back to 20/20 ready 14
+    minutes ago and throughput recovered to 890 jobs/min. The alert has a
+    15-minute evaluation window, so it fired after the condition had already
+    cleared. The queue backlog it caused has drained from 610 to 180, below where
+    it started. Nothing is wrong now and no change should be made.
+  must_include:
+    - ["spot", "reclaim", "node", "terminated", "rescheduled"]
+    - ["recovered", "self-healed", "already", "cleared", "resolved", "20/20", "back to"]
+    - ["evaluation window", "15", "alert fired after", "lag", "delay", "no action", "stale"]
+  must_not_include:
+    - ["scale up", "increase replicas", "roll back", "still degraded", "the incident is ongoing"]
+  expected_actions: [no_action_required, fix_monitoring_config]
+  red_herrings:
+    - "7 restarts in the last hour reads as instability rather than as one clean reschedule"
+    - "the queue depth spiked, tempting a capacity response to a backlog that has already drained"

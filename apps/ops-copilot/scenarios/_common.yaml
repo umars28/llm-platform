@@ -1,0 +1,156 @@
+# Shared across every scenario: the remediation catalogue this environment
+# supports, and the runbooks that are not incident-specific. A scenario file may
+# add its own entries, and may override a shared one by reusing its id.
+#
+# The catalogue is deliberately wide. Picking the right action out of twenty-five
+# is a real decision; picking it out of four is not.
+
+actions:
+  - id: rollback_deploy
+    description: "Roll a service back to a previously released version"
+    risk: medium
+    params: [service, target_version]
+  - id: revert_config_change
+    description: "Revert a configuration or feature-flag change to its prior value"
+    risk: medium
+    params: [target, previous_value]
+  - id: disable_feature_flag
+    description: "Turn a feature flag off for all traffic"
+    risk: low
+    params: [flag]
+  - id: restart_pods
+    description: "Rolling restart of a Deployment's pods"
+    risk: low
+    params: [service]
+  - id: scale_replicas
+    description: "Change the replica count of a Deployment"
+    risk: low
+    params: [service, replicas]
+  - id: adjust_hpa
+    description: "Change a HorizontalPodAutoscaler's bounds or target utilisation"
+    risk: low
+    params: [service, min_replicas, max_replicas, target_utilisation]
+  - id: increase_memory_limit
+    description: "Raise a container's memory limit and restart its pods"
+    risk: medium
+    params: [service, new_limit]
+  - id: increase_cpu_limit
+    description: "Raise a container's CPU limit and restart its pods"
+    risk: medium
+    params: [service, new_limit]
+  - id: increase_db_pool_size
+    description: "Raise a service's database connection pool size and restart its pods"
+    risk: medium
+    params: [service, new_size]
+  - id: increase_client_timeout
+    description: "Raise a service's outbound request timeout"
+    risk: low
+    params: [service, new_timeout_ms]
+  - id: reduce_retry_aggressiveness
+    description: "Lower retry count or add backoff and jitter to a client's retry policy"
+    risk: medium
+    params: [service, max_retries, backoff]
+  - id: enable_circuit_breaker
+    description: "Enable or tighten a circuit breaker on a dependency call path"
+    risk: medium
+    params: [service, dependency]
+  - id: increase_rate_limit
+    description: "Raise a rate limit or quota for a caller"
+    risk: medium
+    params: [target, new_limit]
+  - id: shed_load
+    description: "Shed a percentage of low-priority traffic at the edge"
+    risk: medium
+    params: [percentage, priority]
+  - id: add_database_index
+    description: "Create a database index concurrently"
+    risk: medium
+    params: [table, columns]
+  - id: kill_long_running_query
+    description: "Terminate a specific database backend by pid"
+    risk: medium
+    params: [pid]
+  - id: failover_database
+    description: "Promote a database replica to primary"
+    risk: high
+    params: [cluster]
+  - id: expand_disk_volume
+    description: "Expand a PersistentVolumeClaim"
+    risk: medium
+    params: [claim, new_size]
+  - id: clear_disk_space
+    description: "Remove rotated logs, old images or temporary files from a node"
+    risk: low
+    params: [node, target]
+  - id: rotate_certificate
+    description: "Issue and deploy a replacement TLS certificate"
+    risk: medium
+    params: [service, domain]
+  - id: update_network_policy
+    description: "Modify a NetworkPolicy, security group or firewall rule"
+    risk: high
+    params: [policy, change]
+  - id: drain_node
+    description: "Cordon and drain a node so its pods reschedule elsewhere"
+    risk: medium
+    params: [node]
+  - id: purge_cdn_cache
+    description: "Purge a CDN or edge cache path"
+    risk: low
+    params: [path]
+  - id: fix_monitoring_config
+    description: "Correct an alert rule, scrape config or dashboard query"
+    risk: low
+    params: [target, change]
+  - id: no_action_required
+    description: >-
+      Declare that no production change is warranted. Use this when the alert is
+      an artefact, the condition is already self-healing, or the correct response
+      is to keep observing.
+    risk: low
+    params: [rationale]
+
+runbooks:
+  - id: RB-001
+    title: "Incident triage: first fifteen minutes"
+    tags: [triage, process, incident, general]
+    body: >-
+      Establish when the symptom started, then list every change that landed in
+      the 60 minutes before that. Releases, config pushes and flag flips are the
+      cause of most incidents. Confirm whether the alerting service is the origin
+      or a victim by checking whether its dependencies degraded first.
+  - id: RB-002
+    title: "Rolling back a bad release"
+    tags: [deploy, rollback, release, regression]
+    body: >-
+      Rollback is the default response when an incident begins within 30 minutes
+      of a release and the change is not a security fix. Use rollback_deploy with
+      the last known-good version. Prefer rollback over forward-fixing during an
+      active P1: it is faster and its failure mode is already understood.
+  - id: RB-004
+    title: "Capacity budgets for shared infrastructure"
+    tags: [capacity, limits, budget, database, postgres, quota]
+    body: >-
+      postgres-primary allows 400 connections cluster-wide, currently budgeted at
+      roughly 40 per tier-1 service. Raising a single service's pool to 40 is
+      pre-approved. Redis allows 10000 clients. The shared Kafka cluster allows
+      500 connections per consumer group. Exceeding a budget requires the
+      platform team, not an on-call change.
+  - id: RB-005
+    title: "When an alert is not an incident"
+    tags: [false-positive, monitoring, alerting, artefact, noise]
+    body: >-
+      Before changing production, confirm the symptom is real in a second,
+      independent signal. A metric that moves without any corresponding change in
+      user-facing error rate, latency or throughput is usually a monitoring
+      artefact -- a scrape gap, a relabelled series, a dashboard querying the
+      wrong window. Fix the alert, not the service.
+  - id: RB-006
+    title: "Retry storms and cascading failure"
+    tags: [retry, cascade, thundering-herd, backoff, circuit-breaker, amplification]
+    body: >-
+      A brief dependency blip becomes an outage when clients retry without
+      backoff: N retries multiply offered load by N+1 exactly when the dependency
+      is least able to absorb it. Diagnose by comparing the caller's outbound
+      request rate against the callee's inbound rate -- an amplification ratio
+      well above 1 confirms it. Fix the retry policy, not the callee's capacity.

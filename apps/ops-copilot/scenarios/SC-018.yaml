@@ -1,0 +1,107 @@
+id: SC-018
+title: A brief blip becomes an outage through unbounded client retries
+category: cascading-failure
+alert:
+  name: SearchServiceOverload
+  severity: P1
+  service: search-service
+  fired_at: "2026-09-17T19:40:00Z"
+  description: >-
+    search-service is at 100% CPU and rejecting 70% of requests. It has been
+    degraded for 18 minutes and is not recovering on its own.
+world:
+  services:
+    - {name: search-service, tier: 1, owner: discovery, depends_on: [elasticsearch]}
+    - {name: web-bff, tier: 1, owner: web, depends_on: [search-service]}
+    - {name: mobile-bff, tier: 1, owner: mobile, depends_on: [search-service]}
+    - {name: elasticsearch, tier: 1, owner: platform-team, depends_on: []}
+  deploys:
+    - t: -1440
+      service: web-bff
+      version: v22.0.0
+      commit: 9ab7c31
+      author: mei.c
+      summary: "Add automatic retry on 5xx and timeout for search calls: max_retries=5, no backoff"
+  logs:
+    search-service:
+      - {t: -26, level: WARN, msg: "elasticsearch query timeout (elapsed=3000ms)", count: 140}
+      - {t: -24, level: WARN, msg: "elasticsearch query timeout (elapsed=3000ms)", count: 60}
+      - {t: -20, level: ERROR, msg: "rejecting request: worker pool saturated", count: 22000}
+      - {t: -2, level: ERROR, msg: "rejecting request: worker pool saturated", count: 61000}
+    elasticsearch:
+      - {t: -27, level: WARN, msg: "GC pause 2900ms on data node es-7"}
+      - {t: -24, level: INFO, msg: "cluster health green, 14 nodes"}
+      - {t: -5, level: INFO, msg: "search p99 84ms, rejected 0"}
+  metrics:
+    search-service:
+      inbound_requests_per_s:
+        unit: req/s
+        points: [{t: -60, v: 3200}, {t: -28, v: 3210}, {t: -24, v: 9800}, {t: -12, v: 16400}, {t: 0, v: 17100}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -60, v: 52}, {t: -28, v: 54}, {t: -20, v: 99}, {t: 0, v: 100}]
+      rejection_rate:
+        unit: percent
+        points: [{t: -60, v: 0.1}, {t: -28, v: 0.2}, {t: -20, v: 44}, {t: 0, v: 70}]
+    web-bff:
+      outbound_search_requests_per_s:
+        unit: req/s
+        points: [{t: -60, v: 2100}, {t: -28, v: 2110}, {t: -24, v: 7900}, {t: 0, v: 12300}]
+      user_requests_per_s:
+        unit: req/s
+        points: [{t: -60, v: 2100}, {t: -28, v: 2105}, {t: 0, v: 2090}]
+      retry_rate:
+        unit: retries/s
+        points: [{t: -60, v: 4}, {t: -28, v: 5}, {t: 0, v: 10200}]
+    mobile-bff:
+      outbound_search_requests_per_s:
+        unit: req/s
+        points: [{t: -60, v: 1100}, {t: 0, v: 1150}]
+      retry_rate:
+        unit: retries/s
+        points: [{t: -60, v: 2}, {t: 0, v: 30}]
+    elasticsearch:
+      search_p99_latency_ms:
+        unit: ms
+        points: [{t: -60, v: 78}, {t: -27, v: 2950}, {t: -24, v: 96}, {t: 0, v: 84}]
+      cluster_health:
+        unit: "0=red 1=yellow 2=green"
+        points: [{t: -60, v: 2}, {t: -27, v: 2}, {t: 0, v: 2}]
+  k8s:
+    - kind: Deployment
+      name: search-service
+      namespace: prod
+      spec: {replicas: 16, image: "registry.internal/search-service:v8.1.0"}
+      status: {readyReplicas: 16, restarts_last_hour: 0}
+      events: []
+  runbooks:
+    - id: RB-046
+      title: "Diagnosing retry amplification"
+      tags: [retry, amplification, cascade, backoff, overload, thundering-herd, metastable]
+      body: >-
+        Compare the caller's outbound request rate against its own inbound user
+        request rate. If user traffic is flat while outbound multiplies, the
+        extra load is retries, not demand. The system is metastable: the trigger
+        has passed but retries now sustain the overload, so it will not recover
+        on its own and scaling merely feeds the loop. Fix the retry policy --
+        fewer attempts, exponential backoff with jitter, and a circuit breaker.
+ground_truth:
+  root_cause: >-
+    A 3-minute Elasticsearch GC pause around 27 minutes before the alert caused
+    a brief batch of search timeouts. web-bff, which since yesterday retries 5
+    times with no backoff, amplified that into roughly 6x offered load: its user
+    request rate stayed flat at about 2100/s while its outbound search rate went
+    from 2100/s to 12300/s and its retry rate from 5/s to 10200/s. search-service
+    saturated and now rejects requests, which generates more retries. Elastic-
+    search recovered within three minutes and is healthy at 84ms; the incident is
+    sustained entirely by the retry loop.
+  must_include:
+    - ["retry", "retries", "amplification", "retry storm"]
+    - ["web-bff", "no backoff", "max_retries", "5 retries", "backoff"]
+    - ["elasticsearch", "recovered", "gc pause", "blip", "trigger", "flat", "user traffic"]
+  must_not_include:
+    - ["elasticsearch is down", "search-service needs more replicas", "genuine traffic increase"]
+  expected_actions: [reduce_retry_aggressiveness, enable_circuit_breaker]
+  red_herrings:
+    - "search-service at 100% CPU with 17100 req/s looks exactly like a genuine capacity shortfall"
+    - "mobile-bff calls the same service and is fine, since only web-bff has the aggressive retry policy"

@@ -1,0 +1,109 @@
+id: SC-030
+title: A memory limit raised to stop OOMKills starves its node instead
+category: capacity
+alert:
+  name: MultipleServicesEvicted
+  severity: P1
+  service: ledger-service
+  fired_at: "2026-09-19T06:00:00Z"
+  description: >-
+    Pods from three different services are being evicted from node
+    ip-10-4-6-20 with MemoryPressure. ledger-service has lost 4 pods.
+world:
+  services:
+    - {name: ledger-service, tier: 1, owner: finance-eng, depends_on: [postgres-primary]}
+    - {name: report-builder, tier: 3, owner: analytics, depends_on: [postgres-primary]}
+    - {name: notification-service, tier: 2, owner: comms, depends_on: []}
+    - {name: postgres-primary, tier: 1, owner: platform-team, depends_on: []}
+  deploys:
+    - t: -70
+      service: report-builder
+      version: v3.4.0
+      commit: 6fa2c81
+      author: analytics-bot
+      summary: "Raise memory limit 2Gi -> 24Gi to stop OOMKills on large report generation; requests left at 2Gi"
+  logs:
+    report-builder:
+      - {t: -180, level: ERROR, msg: "OOMKilled generating annual report", count: 14}
+      - {t: -70, level: INFO, msg: "Starting report-builder v3.4.0 (mem_limit=24Gi)"}
+      - {t: -30, level: INFO, msg: "report generated (peak_rss=21.4GiB, duration=1400s)", count: 3}
+    ledger-service:
+      - {t: -12, level: ERROR, msg: "shutting down: evicted by kubelet (MemoryPressure)", count: 4}
+    notification-service:
+      - {t: -9, level: ERROR, msg: "shutting down: evicted by kubelet (MemoryPressure)", count: 2}
+  metrics:
+    report-builder:
+      container_memory_working_set_bytes:
+        unit: MiB
+        points: [{t: -180, v: 1980}, {t: -70, v: 2100}, {t: -40, v: 14800}, {t: -20, v: 21900}, {t: 0, v: 22400}]
+      pod_restarts_total:
+        unit: restarts
+        points: [{t: -180, v: 14}, {t: -70, v: 14}, {t: 0, v: 14}]
+    ledger-service:
+      ready_replicas:
+        unit: pods
+        points: [{t: -180, v: 12}, {t: -20, v: 12}, {t: 0, v: 8}]
+      http_5xx_rate:
+        unit: errors/s
+        points: [{t: -180, v: 0.04}, {t: 0, v: 14.2}]
+      container_memory_working_set_bytes:
+        unit: MiB
+        points: [{t: -180, v: 720}, {t: 0, v: 735}]
+    notification-service:
+      ready_replicas:
+        unit: pods
+        points: [{t: -180, v: 6}, {t: 0, v: 4}]
+  k8s:
+    - kind: Node
+      name: ip-10-4-6-20
+      namespace: prod
+      spec: {instance_type: m6i.8xlarge, allocatable_memory_gi: 30, pods_scheduled: 26}
+      status:
+        conditions: {MemoryPressure: "True", Ready: "True"}
+        memory_used_gi: 29.4
+        memory_requests_gi: 18.2
+        pods_evicted_last_hour: 6
+      events:
+        - {t: -14, type: Warning, reason: EvictionThresholdMet, msg: "Attempting to reclaim memory"}
+        - {t: -12, type: Warning, reason: Evicted, msg: "The node was low on resource: memory"}
+    - kind: Deployment
+      name: report-builder
+      namespace: prod
+      spec:
+        replicas: 2
+        image: "registry.internal/report-builder:v3.4.0"
+        resources: {requests: {cpu: "1", memory: "2Gi"}, limits: {cpu: "2", memory: "24Gi"}}
+      status: {readyReplicas: 2, restarts_last_hour: 0}
+      events: []
+  runbooks:
+    - id: RB-055
+      title: "Requests, limits and node overcommit"
+      tags: [memory, requests, limits, qos, eviction, overcommit, scheduler, burstable]
+      body: >-
+        The scheduler places pods by requests; the kubelet evicts by actual
+        usage. A container whose limit far exceeds its request is Burstable and
+        can consume far more than the scheduler accounted for, pushing its node
+        past the eviction threshold. The kubelet then evicts by QoS class and
+        priority, so well-behaved Guaranteed neighbours are frequently killed
+        instead of the greedy pod. Raise the request alongside the limit so the
+        scheduler reserves the memory, and isolate large batch workloads onto
+        their own node pool.
+ground_truth:
+  root_cause: >-
+    report-builder's memory limit was raised from 2Gi to 24Gi 70 minutes ago to
+    stop OOMKills, but its request was left at 2Gi. The scheduler still accounts
+    for only 2Gi, while the pod now actually uses 22.4GiB on a node with 30Gi
+    allocatable. The node crossed its eviction threshold at 29.4Gi used, and the
+    kubelet evicted lower-priority and Guaranteed neighbours -- 4 ledger-service
+    pods and 2 notification-service pods -- rather than the pod responsible.
+    ledger-service is the victim; its own memory use is flat at 735MiB.
+  must_include:
+    - ["request", "limit", "2gi", "24gi", "requests left", "scheduler"]
+    - ["report-builder", "22", "node", "memory pressure", "eviction", "overcommit"]
+    - ["ledger-service", "victim", "neighbour", "neighbor", "evicted", "not the cause"]
+  must_not_include:
+    - ["ledger-service is leaking", "ledger-service needs more memory", "postgres is the cause", "rollback ledger"]
+  expected_actions: [rollback_deploy, increase_memory_limit, drain_node]
+  red_herrings:
+    - "the alert names ledger-service, whose own memory use never moved"
+    - "the change that caused this was itself a remediation for a real OOMKill problem, so it looks like a fix rather than a cause"

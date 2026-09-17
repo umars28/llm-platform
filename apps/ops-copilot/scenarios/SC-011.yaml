@@ -1,0 +1,93 @@
+id: SC-011
+title: HPA hits maxReplicas during a campaign traffic spike
+category: capacity
+alert:
+  name: MediaAPISaturation
+  severity: P2
+  service: media-api
+  fired_at: "2026-09-16T19:05:00Z"
+  description: >-
+    media-api p99 latency is 2.4s against a 400ms SLO and CPU is pinned at 94%.
+    Error rate is 3% and climbing.
+world:
+  services:
+    - {name: media-api, tier: 1, owner: content, depends_on: [object-store]}
+    - {name: object-store, tier: 1, owner: platform-team, depends_on: []}
+  deploys: []
+  logs:
+    media-api:
+      - {t: -90, level: INFO, msg: "GET /media/{id} 200 (elapsed=118ms)", count: 210000}
+      - {t: -20, level: WARN, msg: "request took 2210ms (cpu throttled 640ms)", count: 18000}
+      - {t: -4, level: ERROR, msg: "504 upstream timeout serving /media/{id}", count: 2400}
+    object-store:
+      - {t: -30, level: INFO, msg: "GET object 200 (elapsed=21ms)", count: 480000}
+  metrics:
+    media-api:
+      requests_per_s:
+        unit: req/s
+        points: [{t: -180, v: 2100}, {t: -90, v: 2400}, {t: -45, v: 6800}, {t: -20, v: 11200}, {t: 0, v: 12400}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -180, v: 48}, {t: -90, v: 52}, {t: -45, v: 79}, {t: 0, v: 94}]
+      ready_replicas:
+        unit: pods
+        points: [{t: -180, v: 6}, {t: -90, v: 8}, {t: -45, v: 12}, {t: -25, v: 12}, {t: 0, v: 12}]
+      http_p99_latency_ms:
+        unit: ms
+        points: [{t: -180, v: 130}, {t: -45, v: 380}, {t: 0, v: 2400}]
+      cpu_throttled_seconds_per_s:
+        unit: s/s
+        points: [{t: -180, v: 0}, {t: -45, v: 0.2}, {t: 0, v: 3.1}]
+    object-store:
+      get_p99_latency_ms:
+        unit: ms
+        points: [{t: -180, v: 24}, {t: 0, v: 26}]
+      error_rate:
+        unit: percent
+        points: [{t: -180, v: 0.01}, {t: 0, v: 0.01}]
+  k8s:
+    - kind: HorizontalPodAutoscaler
+      name: media-api
+      namespace: prod
+      spec: {min_replicas: 4, max_replicas: 12, target_cpu_utilisation: 70, scale_target: media-api}
+      status: {current_replicas: 12, desired_replicas: 24, current_cpu_utilisation: 94}
+      events:
+        - {t: -46, type: Normal, reason: SuccessfulRescale, msg: "New size: 12; reason: cpu resource utilization above target"}
+        - {t: -25, type: Warning, reason: FailedRescale, msg: "desired replica count 24 exceeds maxReplicas 12"}
+    - kind: Deployment
+      name: media-api
+      namespace: prod
+      spec:
+        replicas: 12
+        image: "registry.internal/media-api:v7.3.2"
+        resources: {requests: {cpu: "1", memory: "1Gi"}, limits: {cpu: "2", memory: "2Gi"}}
+      status: {readyReplicas: 12, restarts_last_hour: 0}
+      events: []
+  runbooks:
+    - id: RB-039
+      title: "Autoscaler ceilings during traffic events"
+      tags: [hpa, autoscaler, capacity, maxreplicas, scaling, spike, traffic]
+      body: >-
+        When an HPA reports desired_replicas above current_replicas and emits
+        FailedRescale, it is not failing to notice load -- it is capped. Check
+        maxReplicas against desired. The cluster has spare capacity for roughly
+        40 additional media-api pods. Raising maxReplicas is pre-approved during
+        an active P1 provided desired_replicas is finite and CPU-driven.
+ground_truth:
+  root_cause: >-
+    Traffic rose roughly 6x from 2100 to 12400 req/s. The HPA scaled media-api
+    to its maxReplicas of 12 and then emitted FailedRescale because it wanted
+    24. With scaling capped, per-pod CPU pinned at 94%, the containers began
+    hitting CPU throttling at 3.1 s/s, and latency degraded. Nothing is broken --
+    the service is simply capped below the capacity the load requires, and
+    object-store is healthy at 26ms.
+  must_include:
+    - ["hpa", "autoscaler", "maxreplicas", "max_replicas", "max replicas"]
+    - ["cap", "ceiling", "limit", "24", "failedrescale", "cannot scale"]
+    - ["traffic", "load", "spike", "12400", "6x", "demand"]
+  must_not_include:
+    - ["object-store is slow", "memory leak", "bad deploy", "roll back the deploy"]
+  expected_actions: [adjust_hpa, scale_replicas]
+  red_herrings:
+    - "there is no deploy at all in the window, so a change-driven search finds nothing"
+    - "CPU throttling looks like a limits problem, but the pods need more instances rather than bigger ones"

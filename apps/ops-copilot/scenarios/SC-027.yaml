@@ -1,0 +1,99 @@
+id: SC-027
+title: A relabelled metric makes a healthy service look like it stopped serving
+category: false-alarm
+alert:
+  name: LoyaltyServiceTrafficDrop
+  severity: P2
+  service: loyalty-service
+  fired_at: "2026-09-18T22:10:00Z"
+  description: >-
+    loyalty-service request rate has dropped to zero on the dashboard. The
+    alert fires on requests_per_s below 10 for 5 minutes.
+world:
+  services:
+    - {name: loyalty-service, tier: 2, owner: growth, depends_on: [points-store]}
+    - {name: points-store, tier: 2, owner: growth, depends_on: []}
+    - {name: api-gateway, tier: 1, owner: platform-team, depends_on: [loyalty-service]}
+  deploys:
+    - t: -25
+      service: platform-monitoring
+      version: "prom-2026091802"
+      commit: 9c77b14
+      author: platform-bot
+      summary: "Prometheus relabel rules: rename job label from 'service' to 'k8s_service' across all scrape configs"
+  logs:
+    loyalty-service:
+      - {t: -60, level: INFO, msg: "POST /points/accrue 200 (elapsed=14ms)", count: 52000}
+      - {t: -20, level: INFO, msg: "POST /points/accrue 200 (elapsed=14ms)", count: 17000}
+      - {t: -2, level: INFO, msg: "POST /points/accrue 200 (elapsed=13ms)", count: 1800}
+    api-gateway:
+      - {t: -20, level: INFO, msg: "proxied to loyalty-service 200 (elapsed=16ms)", count: 17400}
+    points-store:
+      - {t: -20, level: INFO, msg: "GET /balance 200 (elapsed=3ms)", count: 18000}
+  metrics:
+    loyalty-service:
+      requests_per_s:
+        unit: req/s
+        points: [{t: -120, v: 880}, {t: -30, v: 875}, {t: -25, v: 0}, {t: 0, v: 0}]
+      scrape_samples_scraped:
+        unit: samples
+        points: [{t: -120, v: 1840}, {t: -30, v: 1838}, {t: -25, v: 0}, {t: 0, v: 0}]
+      http_5xx_rate:
+        unit: errors/s
+        points: [{t: -120, v: 0.03}, {t: -25, v: 0}, {t: 0, v: 0}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 34}, {t: -25, v: 0}, {t: 0, v: 0}]
+    api-gateway:
+      upstream_loyalty_requests_per_s:
+        unit: req/s
+        points: [{t: -120, v: 878}, {t: -25, v: 872}, {t: 0, v: 870}]
+      upstream_loyalty_error_rate:
+        unit: percent
+        points: [{t: -120, v: 0.04}, {t: 0, v: 0.04}]
+      upstream_loyalty_p99_latency_ms:
+        unit: ms
+        points: [{t: -120, v: 18}, {t: 0, v: 17}]
+    points-store:
+      requests_per_s:
+        unit: req/s
+        points: [{t: -120, v: 900}, {t: 0, v: 898}]
+  k8s:
+    - kind: Deployment
+      name: loyalty-service
+      namespace: prod
+      spec: {replicas: 8, image: "registry.internal/loyalty-service:v4.0.2"}
+      status: {readyReplicas: 8, restarts_last_hour: 0}
+      events: []
+    - kind: ConfigMap
+      name: prometheus-scrape-config
+      namespace: monitoring
+      spec:
+        data:
+          relabel: "job label 'service' -> 'k8s_service'"
+          alert_rule: "sum(rate(http_requests_total{service='loyalty-service'}[5m])) < 10"
+          alert_rule_updated: "false"
+      status: {last_applied: "prom-2026091802"}
+      events:
+        - {t: -25, type: Normal, reason: ConfigMapUpdated, msg: "prometheus-scrape-config updated; Prometheus reloaded"}
+  runbooks: []
+ground_truth:
+  root_cause: >-
+    The Prometheus relabel change renamed the job label from 'service' to
+    'k8s_service', but the loyalty-service alert rule still selects on
+    service='loyalty-service' and now matches nothing, so its series report zero.
+    loyalty-service is serving normally -- api-gateway measures 870 req/s to it
+    at 17ms with a 0.04% error rate, its own logs show continuing 200s, and
+    points-store sees unchanged downstream traffic. Every metric that went to
+    zero comes from the affected scrape config; every independent signal is
+    normal. This is a monitoring artefact, not an incident.
+  must_include:
+    - ["relabel", "label", "prometheus", "scrape", "alert rule", "monitoring"]
+    - ["artefact", "artifact", "false", "not real", "still serving", "healthy", "no impact", "not an incident"]
+    - ["api-gateway", "870", "independent", "logs", "points-store", "second signal"]
+  must_not_include:
+    - ["loyalty-service is down", "restart loyalty-service", "roll back loyalty", "traffic stopped"]
+  expected_actions: [fix_monitoring_config, no_action_required]
+  red_herrings:
+    - "CPU and request rate both read exactly zero, which is a convincing picture of a dead service"
+    - "the tempting response is to restart loyalty-service, which would be a production change with no cause"

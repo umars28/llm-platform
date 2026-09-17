@@ -1,0 +1,96 @@
+id: SC-012
+title: Autoscaler tracks CPU while the real constraint is memory
+category: capacity
+alert:
+  name: TranscoderQueueBacklog
+  severity: P2
+  service: transcoder
+  fired_at: "2026-09-16T20:40:00Z"
+  description: >-
+    transcoder job queue has grown to 40000 items over 90 minutes. Jobs are
+    completing, but far slower than they arrive. CPU is at 38%.
+world:
+  services:
+    - {name: transcoder, tier: 2, owner: media-platform, depends_on: [job-queue, object-store]}
+    - {name: job-queue, tier: 1, owner: platform-team, depends_on: []}
+    - {name: object-store, tier: 1, owner: platform-team, depends_on: []}
+  deploys: []
+  logs:
+    transcoder:
+      - {t: -120, level: INFO, msg: "job complete (duration=41s, peak_rss=3.1GiB)", count: 2200}
+      - {t: -60, level: WARN, msg: "job deferred: insufficient memory to start (free=210MiB, required=3.2GiB)", count: 4100}
+      - {t: -10, level: WARN, msg: "job deferred: insufficient memory to start (free=180MiB, required=3.2GiB)", count: 9800}
+    job-queue:
+      - {t: -5, level: INFO, msg: "queue depth for transcoder: 40120"}
+  metrics:
+    transcoder:
+      queue_depth:
+        unit: jobs
+        points: [{t: -180, v: 400}, {t: -120, v: 2100}, {t: -60, v: 18000}, {t: 0, v: 40120}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -180, v: 36}, {t: -90, v: 37}, {t: 0, v: 38}]
+      memory_utilisation:
+        unit: percent
+        points: [{t: -180, v: 88}, {t: -90, v: 96}, {t: 0, v: 98}]
+      ready_replicas:
+        unit: pods
+        points: [{t: -180, v: 6}, {t: -90, v: 6}, {t: 0, v: 6}]
+      jobs_completed_per_min:
+        unit: jobs/min
+        points: [{t: -180, v: 88}, {t: -90, v: 42}, {t: 0, v: 21}]
+      concurrent_jobs:
+        unit: jobs
+        points: [{t: -180, v: 12}, {t: -90, v: 6}, {t: 0, v: 3}]
+    job-queue:
+      enqueue_rate:
+        unit: jobs/min
+        points: [{t: -180, v: 92}, {t: 0, v: 95}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -180, v: 11}, {t: 0, v: 12}]
+  k8s:
+    - kind: HorizontalPodAutoscaler
+      name: transcoder
+      namespace: prod
+      spec: {min_replicas: 2, max_replicas: 40, target_cpu_utilisation: 75, metrics: ["cpu"], scale_target: transcoder}
+      status: {current_replicas: 6, desired_replicas: 6, current_cpu_utilisation: 38}
+      events: []
+    - kind: Deployment
+      name: transcoder
+      namespace: prod
+      spec:
+        replicas: 6
+        image: "registry.internal/transcoder:v2.4.0"
+        resources: {requests: {cpu: "2", memory: "4Gi"}, limits: {cpu: "4", memory: "4Gi"}}
+      status: {readyReplicas: 6, restarts_last_hour: 0}
+      events: []
+  runbooks:
+    - id: RB-040
+      title: "Autoscaling on the wrong signal"
+      tags: [hpa, autoscaler, memory, cpu, scaling, metric, backlog]
+      body: >-
+        An HPA only reacts to the metrics it is configured with. A workload whose
+        bottleneck is memory but whose HPA tracks CPU will sit at its minimum
+        while the queue grows, because CPU never crosses the target. The tell is
+        desired_replicas equal to current_replicas while a backlog builds. Either
+        add a memory metric to the HPA or raise the replica floor. maxReplicas is
+        already 40 here, so the ceiling is not the constraint.
+ground_truth:
+  root_cause: >-
+    transcoder is memory-bound -- each job needs about 3.2GiB against a 4Gi
+    limit -- so memory utilisation sits at 98% and jobs are deferred for lack of
+    memory, dropping concurrency from 12 to 3 and throughput from 88 to 21
+    jobs/min against a steady 95/min arrival rate. The HPA is configured on CPU
+    only, and CPU never leaves 38%, so it holds at 6 replicas and never scales
+    despite having headroom to 40.
+  must_include:
+    - ["hpa", "autoscaler", "scaling"]
+    - ["cpu", "wrong metric", "only cpu", "memory metric", "does not scale", "never scales"]
+    - ["memory", "98%", "memory-bound", "memory bound", "insufficient memory"]
+  must_not_include:
+    - ["maxreplicas has been reached", "max replicas reached", "job-queue is slow", "cpu saturation"]
+  expected_actions: [adjust_hpa, scale_replicas, increase_memory_limit]
+  red_herrings:
+    - "maxReplicas is 40 and unreached, so this is not the SC-011 ceiling problem despite looking similar"
+    - "CPU at 38% reads as an idle service rather than a stuck one"

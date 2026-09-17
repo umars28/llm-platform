@@ -1,0 +1,101 @@
+id: SC-006
+title: Config push points notification service at the staging SMTP relay
+category: config-error
+alert:
+  name: NotificationDeliveryFailure
+  severity: P2
+  service: notification-service
+  fired_at: "2026-09-15T09:30:00Z"
+  description: >-
+    Email delivery success rate has fallen from 99.4% to 2%. Push and SMS
+    channels are unaffected. No code deploy in the last 6 hours.
+world:
+  services:
+    - {name: notification-service, tier: 2, owner: comms, depends_on: [smtp-relay, push-gateway]}
+    - {name: smtp-relay, tier: 2, owner: platform-team, depends_on: []}
+    - {name: push-gateway, tier: 2, owner: comms, depends_on: []}
+  deploys:
+    - t: -22
+      service: notification-service
+      version: "config-2026091502"
+      commit: d0f8e41
+      author: budi.h
+      summary: "Config-only push: update retry tunables and SMTP host. Applied from a branch merged without review."
+    - t: -900
+      service: notification-service
+      version: v6.0.3
+      commit: 91cc204
+      author: sari.l
+      summary: "Add unsubscribe footer template"
+  logs:
+    notification-service:
+      - {t: -25, level: INFO, msg: "email sent to customer (relay=smtp-relay.prod.internal)", count: 8200}
+      - {t: -22, level: INFO, msg: "config reloaded: SMTP_HOST=smtp-relay.staging.internal"}
+      - {t: -20, level: ERROR, msg: "SMTP 550 relay access denied for sender domain", count: 2100}
+      - {t: -5, level: ERROR, msg: "SMTP 550 relay access denied for sender domain", count: 5400}
+      - {t: -5, level: INFO, msg: "push notification delivered", count: 19000}
+    smtp-relay:
+      - {t: -60, level: INFO, msg: "accepted message from 10.4.1.x (queue=normal)", count: 24000}
+      - {t: -5, level: INFO, msg: "accepted message from 10.4.1.x (queue=normal)", count: 1900}
+  metrics:
+    notification-service:
+      email_delivery_success_rate:
+        unit: percent
+        points: [{t: -120, v: 99.4}, {t: -30, v: 99.3}, {t: -22, v: 88}, {t: -10, v: 4}, {t: 0, v: 2}]
+      push_delivery_success_rate:
+        unit: percent
+        points: [{t: -120, v: 99.8}, {t: 0, v: 99.8}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 22}, {t: 0, v: 19}]
+    smtp-relay:
+      messages_accepted_per_s:
+        unit: msg/s
+        points: [{t: -120, v: 410}, {t: -22, v: 405}, {t: 0, v: 32}]
+      queue_depth:
+        unit: messages
+        points: [{t: -120, v: 88}, {t: 0, v: 41}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 14}, {t: 0, v: 4}]
+  k8s:
+    - kind: ConfigMap
+      name: notification-service-config
+      namespace: prod
+      spec:
+        data:
+          SMTP_HOST: "smtp-relay.staging.internal"
+          SMTP_PORT: "587"
+          RETRY_MAX: "5"
+          RETRY_BACKOFF_MS: "2000"
+      status: {last_applied: "config-2026091502"}
+      events:
+        - {t: -22, type: Normal, reason: ConfigMapUpdated, msg: "ConfigMap notification-service-config updated, pods reloaded"}
+  runbooks:
+    - id: RB-034
+      title: "Config pushes are deploys"
+      tags: [config, configmap, change, environment, staging, credentials]
+      body: >-
+        Config changes are the second most common incident cause after code
+        releases and are easy to miss because they do not appear in release
+        dashboards. Always check ConfigMap and feature-flag history over the same
+        window as deploys. An SMTP 550 "relay access denied" means the relay does
+        not recognise the sender -- nearly always a wrong host or a cross
+        environment pointer, not a relay fault.
+ground_truth:
+  root_cause: >-
+    A config-only push 22 minutes before the alert set SMTP_HOST to
+    smtp-relay.staging.internal. The staging relay rejects the production sender
+    domain with SMTP 550, so email delivery collapsed while push, which does not
+    use SMTP, stayed healthy. The production relay is fine -- its accepted
+    message rate fell simply because nothing is being sent to it any more.
+  must_include:
+    - ["config", "configmap", "smtp_host", "config push"]
+    - ["staging", "wrong host", "wrong environment", "smtp-relay.staging"]
+    - ["550", "relay access denied", "rejected", "denied"]
+  must_not_include:
+    - ["smtp-relay is down", "smtp-relay is overloaded", "code deploy caused"]
+  expected_actions: [revert_config_change]
+  red_herrings:
+    - "smtp-relay throughput fell sharply, which looks like the relay failing rather than being starved of input"
+    - "the last code deploy was 15 hours earlier, tempting an 'no recent change' conclusion"

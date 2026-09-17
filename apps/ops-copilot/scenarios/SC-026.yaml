@@ -1,0 +1,96 @@
+id: SC-026
+title: Clock skew on a node makes token validation fail for a fraction of requests
+category: misleading-signal
+alert:
+  name: AuthIntermittentRejections
+  severity: P2
+  service: auth-service
+  fired_at: "2026-09-18T20:30:00Z"
+  description: >-
+    auth-service rejects roughly 12% of valid tokens as "not yet valid".
+    Retrying the same request usually succeeds.
+world:
+  services:
+    - {name: auth-service, tier: 1, owner: identity, depends_on: [token-issuer]}
+    - {name: token-issuer, tier: 1, owner: identity, depends_on: []}
+  deploys: []
+  logs:
+    auth-service:
+      - {t: -60, level: ERROR, msg: "token validation failed: nbf claim 2026-09-18T20:29:58Z is in the future (now=2026-09-18T20:29:51Z) (pod=auth-service-3d81-kk2p, node=ip-10-4-1-44)", count: 6400}
+      - {t: -20, level: INFO, msg: "token validated ok (pod=auth-service-3d81-w9xc, node=ip-10-4-5-08)", count: 88000}
+    token-issuer:
+      - {t: -30, level: INFO, msg: "issued token (ttl=3600s)", count: 94000}
+  metrics:
+    auth-service:
+      token_rejection_rate:
+        unit: percent
+        points: [{t: -360, v: 0.2}, {t: -240, v: 11.8}, {t: -60, v: 12.1}, {t: 0, v: 12.0}]
+      http_p99_latency_ms:
+        unit: ms
+        points: [{t: -360, v: 12}, {t: 0, v: 13}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -360, v: 24}, {t: 0, v: 25}]
+      ready_replicas:
+        unit: pods
+        points: [{t: -360, v: 16}, {t: 0, v: 16}]
+    token-issuer:
+      tokens_issued_per_s:
+        unit: tokens/s
+        points: [{t: -360, v: 520}, {t: 0, v: 524}]
+      http_5xx_rate:
+        unit: errors/s
+        points: [{t: -360, v: 0}, {t: 0, v: 0}]
+  k8s:
+    - kind: Node
+      name: ip-10-4-1-44
+      namespace: prod
+      spec: {instance_type: m6i.2xlarge, pods_scheduled: 18}
+      status:
+        conditions: {Ready: "True"}
+        ntp_sync: "false"
+        clock_offset_seconds: -7.4
+        auth_service_pods: 2
+      events:
+        - {t: -250, type: Warning, reason: NTPSyncLost, msg: "chronyd unable to reach time servers; local clock drifting"}
+    - kind: Node
+      name: ip-10-4-5-08
+      namespace: prod
+      spec: {instance_type: m6i.2xlarge, pods_scheduled: 21}
+      status: {conditions: {Ready: "True"}, ntp_sync: "true", clock_offset_seconds: 0.003, auth_service_pods: 2}
+      events: []
+    - kind: Deployment
+      name: auth-service
+      namespace: prod
+      spec: {replicas: 16, image: "registry.internal/auth-service:v6.4.0"}
+      status: {readyReplicas: 16, restarts_last_hour: 0}
+      events: []
+  runbooks:
+    - id: RB-053
+      title: "Clock skew and time-sensitive validation"
+      tags: [clock, ntp, skew, time, token, nbf, jwt, drift, intermittent]
+      body: >-
+        A JWT nbf or exp rejection reported as "in the future" means the
+        validator's clock disagrees with the issuer's, not that the token is
+        wrong. Check ntp_sync and clock_offset_seconds on the nodes hosting the
+        rejecting pods. Skew produces a failure rate proportional to the share of
+        pods on affected nodes, and retries appear to fix it because they land on
+        a different pod. Restore time sync -- typically by draining the node.
+ground_truth:
+  root_cause: >-
+    Node ip-10-4-1-44 lost NTP sync about four hours ago and its clock has
+    drifted 7.4 seconds behind. The two auth-service pods on that node see
+    freshly issued tokens as not yet valid because the nbf claim is in their
+    past-shifted future, so they reject them. That node hosts 2 of 16 pods, which
+    matches the steady 12% rejection rate, and retries succeed because they land
+    on a correctly-synced pod. token-issuer is healthy and the tokens are valid.
+  must_include:
+    - ["clock", "ntp", "time", "skew", "drift"]
+    - ["node", "ip-10-4-1-44", "7.4", "offset", "behind"]
+    - ["nbf", "not yet valid", "token", "subset", "2 of 16", "12%", "some pods"]
+  must_not_include:
+    - ["token-issuer is broken", "tokens are invalid", "deploy caused", "auth-service bug"]
+  expected_actions: [drain_node]
+  red_herrings:
+    - "the error message blames the token, pointing attention at token-issuer"
+    - "retries succeed, which reads as a transient fault rather than a fixed subset of pods"

@@ -1,0 +1,90 @@
+id: SC-013
+title: Table growth turns an unindexed lookup into a sequential scan
+category: data-layer
+alert:
+  name: AuditQuerySlow
+  severity: P2
+  service: compliance-api
+  fired_at: "2026-09-17T05:30:00Z"
+  description: >-
+    compliance-api p99 has degraded steadily over two weeks, now 8.9s. No
+    recent deploys. Degradation is gradual, not a step change.
+world:
+  services:
+    - {name: compliance-api, tier: 2, owner: security-team, depends_on: [postgres-primary]}
+    - {name: postgres-primary, tier: 1, owner: platform-team, depends_on: []}
+  deploys:
+    - t: -20160
+      service: compliance-api
+      version: v1.9.0
+      commit: 6d02ac7
+      author: security-bot
+      summary: "Add tenant-scoped audit search endpoint"
+  logs:
+    compliance-api:
+      - {t: -10080, level: WARN, msg: "slow request: GET /audit/search 1420ms", count: 300}
+      - {t: -1440, level: WARN, msg: "slow request: GET /audit/search 5900ms", count: 2100}
+      - {t: -20, level: WARN, msg: "slow request: GET /audit/search 8880ms", count: 890}
+    postgres-primary:
+      - {t: -30, level: INFO, msg: "duration: 8712.442 ms  statement: SELECT * FROM audit_events WHERE tenant_id = $1 AND created_at > $2", count: 890}
+      - {t: -30, level: INFO, msg: "plan: Seq Scan on audit_events  (cost=0.00..1842011.00 rows=412 width=280)", count: 890}
+  metrics:
+    compliance-api:
+      http_p99_latency_ms:
+        unit: ms
+        points: [{t: -20160, v: 340}, {t: -10080, v: 1420}, {t: -4320, v: 4100}, {t: -1440, v: 5900}, {t: 0, v: 8900}]
+      requests_per_s:
+        unit: req/s
+        points: [{t: -20160, v: 14}, {t: -1440, v: 15}, {t: 0, v: 14}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -20160, v: 12}, {t: 0, v: 13}]
+    postgres-primary:
+      audit_events_row_count:
+        unit: rows
+        points: [{t: -20160, v: 4100000}, {t: -10080, v: 18400000}, {t: -1440, v: 61000000}, {t: 0, v: 78000000}]
+      seq_scans_per_s:
+        unit: scans/s
+        points: [{t: -20160, v: 0.3}, {t: -1440, v: 12}, {t: 0, v: 14}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -20160, v: 21}, {t: -1440, v: 58}, {t: 0, v: 74}]
+      buffer_cache_hit_ratio:
+        unit: percent
+        points: [{t: -20160, v: 99.4}, {t: 0, v: 71.2}]
+      active_connections:
+        unit: connections
+        points: [{t: -20160, v: 96}, {t: 0, v: 141}]
+      max_connections:
+        unit: connections
+        points: [{t: -20160, v: 400}, {t: 0, v: 400}]
+  k8s: []
+  runbooks:
+    - id: RB-041
+      title: "Sequential scans on grown tables"
+      tags: [database, index, seq-scan, query-plan, postgres, slow, gradual]
+      body: >-
+        Gradual degradation with no change window is the signature of data
+        growth rather than a regression. A query plan showing Seq Scan on a large
+        table, together with a falling buffer cache hit ratio, means the planner
+        has no usable index for the predicate. Create the index with
+        add_database_index, which runs CONCURRENTLY and does not take a write
+        lock. Match the index to the full predicate, not just the first column.
+ground_truth:
+  root_cause: >-
+    The audit_events table grew from 4.1M to 78M rows over two weeks. The
+    tenant-scoped search query filters on tenant_id and created_at with no
+    supporting index, so Postgres falls back to a sequential scan -- confirmed by
+    the logged plan and by seq scans rising from 0.3/s to 14/s. The buffer cache
+    hit ratio fell from 99.4% to 71.2% because each scan evicts the working set.
+    Request rate is flat, so this is data volume, not load.
+  must_include:
+    - ["index", "seq scan", "sequential scan", "no index", "missing index"]
+    - ["audit_events", "row", "grew", "growth", "78", "table size", "volume"]
+    - ["tenant_id", "created_at", "query plan", "predicate", "planner"]
+  must_not_include:
+    - ["recent deploy", "traffic increase", "connection pool", "roll back the deploy"]
+  expected_actions: [add_database_index]
+  red_herrings:
+    - "Postgres CPU at 74% suggests an undersized database rather than one query plan"
+    - "there is no change window at all, which defeats the usual deploy-correlation approach"

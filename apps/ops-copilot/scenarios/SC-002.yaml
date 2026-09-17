@@ -1,0 +1,114 @@
+id: SC-002
+title: Recommendation service OOMKilled in a loop after a caching change
+category: resource-exhaustion
+alert:
+  name: PodCrashLoopBackOff
+  severity: P2
+  service: reco-api
+  fired_at: "2026-09-12T11:40:00Z"
+  description: >-
+    reco-api pods have restarted 14 times in the last 30 minutes. Availability
+    is degraded but not zero; the service is serving from 2 of 8 healthy pods.
+world:
+  services:
+    - {name: reco-api, tier: 2, owner: ml-platform, depends_on: [feature-store, redis-cache]}
+    - {name: feature-store, tier: 2, owner: ml-platform, depends_on: [postgres-primary]}
+    - {name: redis-cache, tier: 2, owner: platform-team, depends_on: []}
+  deploys:
+    - t: -95
+      service: reco-api
+      version: v4.2.0
+      commit: c71be03
+      author: dewi.s
+      summary: "Cache feature vectors in-process to cut feature-store calls; unbounded dict keyed by user_id"
+    - t: -300
+      service: redis-cache
+      version: v7.2.4
+      commit: e10a9bb
+      author: platform-bot
+      summary: "Routine Redis patch release"
+  logs:
+    reco-api:
+      - {t: -95, level: INFO, msg: "Starting reco-api v4.2.0 (in_process_cache=enabled)"}
+      - {t: -60, level: INFO, msg: "feature cache: 184203 entries, est 612MB"}
+      - {t: -40, level: WARN, msg: "GC pause 890ms (heap 1.81GiB/1.86GiB)", count: 22}
+      - {t: -28, level: WARN, msg: "GC pause 1740ms (heap 1.84GiB/1.86GiB)", count: 96}
+      - {t: -20, level: ERROR, msg: "java.lang.OutOfMemoryError: Java heap space", count: 6}
+      - {t: -8, level: ERROR, msg: "java.lang.OutOfMemoryError: Java heap space", count: 8}
+    feature-store:
+      - {t: -60, level: INFO, msg: "GET /features 200 (elapsed=18ms)", count: 41000}
+      - {t: -5, level: INFO, msg: "GET /features 200 (elapsed=17ms)", count: 9400}
+  metrics:
+    reco-api:
+      container_memory_working_set_bytes:
+        unit: MiB
+        points: [{t: -120, v: 640}, {t: -95, v: 655}, {t: -70, v: 1180}, {t: -40, v: 1810}, {t: -20, v: 1920}, {t: 0, v: 1918}]
+      pod_restarts_total:
+        unit: restarts
+        points: [{t: -120, v: 0}, {t: -60, v: 0}, {t: -30, v: 5}, {t: 0, v: 14}]
+      http_p99_latency_ms:
+        unit: ms
+        points: [{t: -120, v: 96}, {t: -60, v: 104}, {t: -30, v: 240}, {t: 0, v: 310}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 38}, {t: -60, v: 44}, {t: 0, v: 51}]
+      feature_store_calls_per_s:
+        unit: req/s
+        points: [{t: -120, v: 680}, {t: -95, v: 682}, {t: -60, v: 91}, {t: 0, v: 88}]
+    redis-cache:
+      connected_clients:
+        unit: clients
+        points: [{t: -120, v: 310}, {t: 0, v: 298}]
+      used_memory:
+        unit: MiB
+        points: [{t: -120, v: 2100}, {t: 0, v: 2140}]
+      evicted_keys_per_s:
+        unit: keys/s
+        points: [{t: -120, v: 0}, {t: 0, v: 0}]
+  k8s:
+    - kind: Deployment
+      name: reco-api
+      namespace: prod
+      spec:
+        replicas: 8
+        image: "registry.internal/reco-api:v4.2.0"
+        env: {JAVA_OPTS: "-Xmx1856m", FEATURE_CACHE: "enabled"}
+        resources:
+          requests: {cpu: "1", memory: "1Gi"}
+          limits: {cpu: "2", memory: "2Gi"}
+      status:
+        readyReplicas: 2
+        restarts_last_hour: 14
+      events:
+        - {t: -20, type: Warning, reason: OOMKilling, msg: "Container reco-api exceeded memory limit 2Gi, killed"}
+        - {t: -8, type: Warning, reason: BackOff, msg: "Back-off restarting failed container"}
+  runbooks:
+    - id: RB-030
+      title: "OOMKilled containers and heap growth"
+      tags: [memory, oom, heap, jvm, leak, restart, crashloop]
+      body: >-
+        A container killed at its memory limit is either under-provisioned for a
+        genuine working set, or leaking. Distinguish them by shape: a working set
+        that steps up once and plateaus below the limit is provisioning; one that
+        grows monotonically with traffic and never plateaus is a leak. Raising
+        the limit buys time against a leak but does not fix it -- an unbounded
+        cache will fill any limit you give it. Prefer reverting the change that
+        introduced the growth.
+ground_truth:
+  root_cause: >-
+    reco-api v4.2.0 introduced an in-process feature-vector cache keyed by
+    user_id with no size bound or eviction. It grew monotonically with unique
+    users until the JVM heap hit its 1856m ceiling inside a 2Gi container limit,
+    producing long GC pauses and then OOMKills, which is what put the pods into
+    a crash loop. The drop in feature-store calls from 680/s to 88/s confirms the
+    cache is the new code path.
+  must_include:
+    - ["cache", "in-process", "in process"]
+    - ["unbounded", "no eviction", "no bound", "grows", "leak", "unlimited"]
+    - ["v4.2.0", "deploy", "release", "memory limit", "oom"]
+  must_not_include:
+    - ["redis is full", "redis eviction", "feature-store is slow"]
+  expected_actions: [rollback_deploy, disable_feature_flag]
+  red_herrings:
+    - "redis-cache had a patch release but shows flat memory, flat clients and zero evictions"
+    - "feature-store is healthy at 17-18ms; its call volume dropped because of the new cache"

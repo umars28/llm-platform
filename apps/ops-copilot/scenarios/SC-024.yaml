@@ -1,0 +1,96 @@
+id: SC-024
+title: A mutable image tag pulls an unreleased build onto restarted pods
+category: bad-release
+alert:
+  name: EmailWorkerErrors
+  severity: P2
+  service: email-worker
+  fired_at: "2026-09-18T16:50:00Z"
+  description: >-
+    email-worker is failing 45% of jobs with a schema error. No deploy has been
+    recorded for email-worker in 9 days.
+world:
+  services:
+    - {name: email-worker, tier: 2, owner: comms, depends_on: [job-queue, template-service]}
+    - {name: job-queue, tier: 1, owner: platform-team, depends_on: []}
+    - {name: template-service, tier: 2, owner: comms, depends_on: []}
+  deploys:
+    - t: -12960
+      service: email-worker
+      version: "latest"
+      commit: 5c91ee0
+      author: comms-bot
+      summary: "Deploy email-worker using image tag 'latest'"
+  logs:
+    email-worker:
+      - {t: -90, level: INFO, msg: "job complete (template=receipt_v2)", count: 22000}
+      - {t: -44, level: INFO, msg: "Starting email-worker (image_digest=sha256:9d1c..., built 2026-09-18T16:02Z)", count: 5}
+      - {t: -40, level: ERROR, msg: "template render failed: unknown field 'locale_tag' in template context", count: 8800}
+      - {t: -5, level: ERROR, msg: "template render failed: unknown field 'locale_tag' in template context", count: 12000}
+    template-service:
+      - {t: -30, level: INFO, msg: "GET /template/receipt_v2 200 (elapsed=6ms)", count: 30000}
+  metrics:
+    email-worker:
+      job_failure_rate:
+        unit: percent
+        points: [{t: -180, v: 0.4}, {t: -60, v: 0.4}, {t: -44, v: 21}, {t: -20, v: 44}, {t: 0, v: 45}]
+      ready_replicas:
+        unit: pods
+        points: [{t: -180, v: 12}, {t: -50, v: 12}, {t: 0, v: 12}]
+      pods_with_current_digest:
+        unit: pods
+        points: [{t: -180, v: 12}, {t: -44, v: 7}, {t: 0, v: 5}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -180, v: 33}, {t: 0, v: 30}]
+    template-service:
+      http_5xx_rate:
+        unit: errors/s
+        points: [{t: -180, v: 0}, {t: 0, v: 0}]
+  k8s:
+    - kind: Deployment
+      name: email-worker
+      namespace: prod
+      spec:
+        replicas: 12
+        image: "registry.internal/email-worker:latest"
+        image_pull_policy: Always
+      status:
+        readyReplicas: 12
+        restarts_last_hour: 5
+        running_digests:
+          - {digest: "sha256:3ba7...", pods: 5, pushed: "2026-09-09T11:20Z"}
+          - {digest: "sha256:9d1c...", pods: 7, pushed: "2026-09-18T16:02Z"}
+      events:
+        - {t: -46, type: Normal, reason: NodeRebalance, msg: "7 pods rescheduled during node pool scale-down"}
+        - {t: -44, type: Normal, reason: Pulled, msg: "Successfully pulled image email-worker:latest (sha256:9d1c...)"}
+  runbooks:
+    - id: RB-051
+      title: "Mutable image tags"
+      tags: [image, tag, latest, digest, immutable, deploy, drift, reschedule]
+      body: >-
+        A Deployment pinned to a mutable tag such as latest with imagePullPolicy
+        Always does not run one version -- it runs whatever was last pushed, and
+        only on pods that happen to restart. A node rebalance, eviction or scale
+        event silently rolls out an unreleased build to part of the fleet with no
+        deploy record anywhere. The tell is two digests running simultaneously
+        under one Deployment and a failure rate proportional to the split. Pin to
+        a digest or an immutable tag.
+ground_truth:
+  root_cause: >-
+    email-worker is deployed with the mutable tag latest and imagePullPolicy
+    Always. A node pool scale-down rescheduled 7 of 12 pods 46 minutes ago, and
+    those pods pulled sha256:9d1c, an unreleased build pushed at 16:02 that
+    passes a locale_tag field the production template does not accept. The
+    Deployment now runs two digests at once, and the 45% failure rate tracks the
+    7-of-12 split. No deploy was recorded because none was performed.
+  must_include:
+    - ["latest", "mutable tag", "image tag", "digest"]
+    - ["reschedul", "restart", "node", "pull", "rebalance", "scale-down"]
+    - ["two", "mixed", "7", "split", "unreleased", "9d1c", "partial"]
+  must_not_include:
+    - ["template-service is broken", "job-queue is the cause", "deploy was performed", "rollback the deploy that happened"]
+  expected_actions: [rollback_deploy, revert_config_change]
+  red_herrings:
+    - "no deploy record exists for email-worker, so a change search over the window finds nothing"
+    - "the template error message points at template-service, which is entirely healthy"

@@ -1,0 +1,102 @@
+id: SC-016
+title: A tightened NetworkPolicy silently drops traffic to the fraud scorer
+category: network
+alert:
+  name: PaymentAuthTimeouts
+  severity: P1
+  service: payment-auth
+  fired_at: "2026-09-17T15:05:00Z"
+  description: >-
+    payment-auth is timing out on 100% of fraud-scoring calls. Authorisations
+    are falling back to manual review. No deploy on either service.
+world:
+  services:
+    - {name: payment-auth, tier: 1, owner: payments-team, depends_on: [fraud-scorer]}
+    - {name: fraud-scorer, tier: 1, owner: risk, depends_on: []}
+  deploys:
+    - t: -18
+      service: platform-network
+      version: "netpol-2026091701"
+      commit: 7ee1c02
+      author: security-bot
+      summary: "Tighten default-deny NetworkPolicy in prod; allow-list rebuilt from service annotations"
+  logs:
+    payment-auth:
+      - {t: -40, level: INFO, msg: "fraud score received (elapsed=31ms)", count: 52000}
+      - {t: -16, level: ERROR, msg: "dial tcp 10.4.9.22:8443: i/o timeout (upstream=fraud-scorer)", count: 8800}
+      - {t: -2, level: ERROR, msg: "dial tcp 10.4.9.22:8443: i/o timeout (upstream=fraud-scorer)", count: 12000}
+    fraud-scorer:
+      - {t: -40, level: INFO, msg: "POST /score 200 (elapsed=28ms)", count: 52000}
+      - {t: -16, level: INFO, msg: "healthcheck ok, 0 requests in last 60s", count: 16}
+  metrics:
+    payment-auth:
+      upstream_timeout_rate:
+        unit: percent
+        points: [{t: -120, v: 0.2}, {t: -20, v: 0.2}, {t: -16, v: 100}, {t: 0, v: 100}]
+      manual_review_queue:
+        unit: authorisations
+        points: [{t: -120, v: 40}, {t: 0, v: 11400}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 38}, {t: 0, v: 21}]
+    fraud-scorer:
+      requests_per_s:
+        unit: req/s
+        points: [{t: -120, v: 860}, {t: -20, v: 855}, {t: -16, v: 0}, {t: 0, v: 0}]
+      http_5xx_rate:
+        unit: errors/s
+        points: [{t: -120, v: 0}, {t: 0, v: 0}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -120, v: 44}, {t: 0, v: 2}]
+      ready_replicas:
+        unit: pods
+        points: [{t: -120, v: 8}, {t: 0, v: 8}]
+  k8s:
+    - kind: NetworkPolicy
+      name: prod-default-deny
+      namespace: prod
+      spec:
+        policy_types: [Ingress]
+        default: deny
+        ingress_allow:
+          - {to: fraud-scorer, from: [risk-console, batch-scorer]}
+          - {to: payment-auth, from: [api-gateway]}
+      status: {last_applied: "netpol-2026091701", previous_revision_allowed: ["payment-auth -> fraud-scorer"]}
+      events:
+        - {t: -18, type: Normal, reason: PolicyApplied, msg: "NetworkPolicy prod-default-deny updated (12 allow rules, previously 19)"}
+    - kind: Deployment
+      name: fraud-scorer
+      namespace: prod
+      spec: {replicas: 8, image: "registry.internal/fraud-scorer:v4.1.0"}
+      status: {readyReplicas: 8, restarts_last_hour: 0}
+      events: []
+  runbooks:
+    - id: RB-044
+      title: "NetworkPolicy changes and silent drops"
+      tags: [network, networkpolicy, firewall, timeout, connectivity, deny, policy]
+      body: >-
+        A dropped packet produces a connect timeout, not a refused connection --
+        the caller waits, the callee never sees the request, and both services
+        report themselves healthy. The tell is a callee whose inbound request
+        rate goes to exactly zero while it stays ready and idle. Correlate
+        against NetworkPolicy, security group and firewall revisions over the
+        same window as deploys. Rebuilding an allow-list from annotations drops
+        any rule whose annotation was missing.
+ground_truth:
+  root_cause: >-
+    The prod-default-deny NetworkPolicy was rebuilt from service annotations and
+    went from 19 allow rules to 12, dropping the payment-auth to fraud-scorer
+    rule. Packets are now silently discarded, so payment-auth sees connect
+    timeouts while fraud-scorer sits ready with exactly zero inbound requests and
+    2% CPU. Neither service deployed; the change was a network policy revision.
+  must_include:
+    - ["networkpolicy", "network policy", "allow rule", "allow-list", "firewall", "default-deny"]
+    - ["drop", "blocked", "denied", "timeout", "connectivity", "silently"]
+    - ["fraud-scorer", "payment-auth", "netpol", "rule removed", "19", "12"]
+  must_not_include:
+    - ["fraud-scorer is down", "fraud-scorer is overloaded", "deploy caused", "dns resolution is failing"]
+  expected_actions: [update_network_policy, revert_config_change]
+  red_herrings:
+    - "fraud-scorer reports itself completely healthy with 8 ready replicas and zero errors"
+    - "neither application service deployed, so a deploy-only change search finds nothing"

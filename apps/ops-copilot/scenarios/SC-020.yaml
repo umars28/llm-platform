@@ -1,0 +1,100 @@
+id: SC-020
+title: A circuit breaker stays open long after its dependency recovered
+category: cascading-failure
+alert:
+  name: ShippingQuotesUnavailable
+  severity: P2
+  service: shipping-service
+  fired_at: "2026-09-18T08:30:00Z"
+  description: >-
+    shipping-service returns "quotes unavailable" for 100% of requests.
+    The carrier-gateway dependency it calls reports itself healthy.
+world:
+  services:
+    - {name: shipping-service, tier: 1, owner: logistics, depends_on: [carrier-gateway]}
+    - {name: carrier-gateway, tier: 2, owner: logistics, depends_on: []}
+  deploys:
+    - t: -2880
+      service: shipping-service
+      version: v7.0.0
+      commit: 40bb1fc
+      author: arif.m
+      summary: "Add circuit breaker on carrier-gateway: opens at 50% errors, half_open_after=0 (misconfigured), reset requires restart"
+  logs:
+    shipping-service:
+      - {t: -180, level: ERROR, msg: "carrier-gateway 503 upstream unavailable", count: 4100}
+      - {t: -172, level: WARN, msg: "circuit breaker OPEN for carrier-gateway (error_rate=71%)"}
+      - {t: -170, level: WARN, msg: "circuit breaker OPEN, short-circuiting request", count: 210000}
+      - {t: -20, level: WARN, msg: "circuit breaker OPEN, short-circuiting request", count: 46000}
+    carrier-gateway:
+      - {t: -180, level: ERROR, msg: "upstream carrier API 503", count: 3900}
+      - {t: -168, level: INFO, msg: "upstream carrier API recovered"}
+      - {t: -60, level: INFO, msg: "healthcheck ok, 0 requests in last 60s", count: 60}
+  metrics:
+    shipping-service:
+      quote_success_rate:
+        unit: percent
+        points: [{t: -240, v: 99.6}, {t: -180, v: 29}, {t: -170, v: 0}, {t: -60, v: 0}, {t: 0, v: 0}]
+      circuit_breaker_state:
+        unit: "0=closed 1=half-open 2=open"
+        points: [{t: -240, v: 0}, {t: -172, v: 2}, {t: -100, v: 2}, {t: 0, v: 2}]
+      outbound_requests_per_s:
+        unit: req/s
+        points: [{t: -240, v: 340}, {t: -172, v: 0}, {t: 0, v: 0}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -240, v: 30}, {t: 0, v: 11}]
+      pod_restarts_total:
+        unit: restarts
+        points: [{t: -240, v: 0}, {t: 0, v: 0}]
+    carrier-gateway:
+      upstream_error_rate:
+        unit: percent
+        points: [{t: -240, v: 0.4}, {t: -180, v: 68}, {t: -168, v: 0.5}, {t: 0, v: 0.4}]
+      requests_per_s:
+        unit: req/s
+        points: [{t: -240, v: 340}, {t: -172, v: 0}, {t: 0, v: 0}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -240, v: 28}, {t: 0, v: 3}]
+  k8s:
+    - kind: Deployment
+      name: shipping-service
+      namespace: prod
+      spec:
+        replicas: 6
+        image: "registry.internal/shipping-service:v7.0.0"
+        env: {CB_ERROR_THRESHOLD: "50", CB_HALF_OPEN_AFTER_S: "0", CB_RESET_ON_RESTART_ONLY: "true"}
+      status: {readyReplicas: 6, restarts_last_hour: 0}
+      events: []
+  runbooks:
+    - id: RB-048
+      title: "Circuit breakers that never close"
+      tags: [circuit-breaker, recovery, half-open, stuck, dependency, reset]
+      body: >-
+        A circuit breaker must periodically admit a trial request to discover
+        that its dependency has recovered. A breaker configured with no half-open
+        interval never probes, so it stays open indefinitely and the outage
+        outlives its cause. The signature is a dependency that is healthy but
+        receiving exactly zero traffic, with the caller short-circuiting locally.
+        A rolling restart closes the breaker immediately; correcting the
+        half-open interval is the durable fix.
+ground_truth:
+  root_cause: >-
+    carrier-gateway's upstream carrier API had a real 12-minute outage roughly
+    three hours ago, which correctly tripped shipping-service's circuit breaker.
+    The breaker is configured with CB_HALF_OPEN_AFTER_S=0 and reset only on
+    restart, so it never sends a trial request and has stayed open ever since.
+    carrier-gateway recovered 168 minutes ago and has been idle at 3% CPU with
+    zero inbound requests. The original fault is long gone; the breaker is now
+    the outage.
+  must_include:
+    - ["circuit breaker", "breaker", "open"]
+    - ["half-open", "half open", "never closes", "stuck", "no probe", "does not retry", "reset"]
+    - ["carrier-gateway", "recovered", "healthy", "already recovered", "168"]
+  must_not_include:
+    - ["carrier-gateway is down", "carrier api is still failing", "needs more capacity"]
+  expected_actions: [restart_pods, revert_config_change]
+  red_herrings:
+    - "there was a genuine upstream outage earlier, so the first plausible story is that it is ongoing"
+    - "carrier-gateway receiving zero requests looks like it is unreachable rather than un-called"

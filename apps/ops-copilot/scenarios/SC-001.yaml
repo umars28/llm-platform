@@ -1,0 +1,208 @@
+id: SC-001
+title: Checkout p99 latency spike from DB connection pool exhaustion
+category: resource-exhaustion
+alert:
+  name: CheckoutAPIHighLatency
+  severity: P1
+  service: checkout-api
+  fired_at: "2026-09-12T02:14:00Z"
+  description: >-
+    p99 latency on checkout-api has exceeded the 800ms SLO for 10 consecutive
+    minutes. Current p99 is 4.2s. Error rate is climbing.
+
+world:
+  services:
+    - name: checkout-api
+      tier: 1
+      owner: payments-team
+      depends_on: [postgres-primary, inventory-api]
+    - name: inventory-api
+      tier: 2
+      owner: catalog-team
+      depends_on: [postgres-primary]
+    - name: postgres-primary
+      tier: 1
+      owner: platform-team
+      depends_on: []
+
+  deploys:
+    - t: -38
+      service: checkout-api
+      version: v2.31.0
+      commit: 9f3c1ab
+      author: rina.p
+      summary: "Add order history sidebar; new per-request audit write to Postgres"
+    - t: -52
+      service: inventory-api
+      version: v1.14.2
+      commit: 4ad0e77
+      author: tom.w
+      summary: "Bump logging library, no behaviour change"
+
+  logs:
+    checkout-api:
+      - t: -45
+        level: INFO
+        msg: "Starting checkout-api v2.30.4 (pool_size=20, pool_timeout=5s)"
+      - t: -38
+        level: INFO
+        msg: "Starting checkout-api v2.31.0 (pool_size=20, pool_timeout=5s)"
+      - t: -22
+        level: WARN
+        msg: "db pool: waited 1840ms to acquire connection (in_use=20/20, waiters=7)"
+        count: 34
+      - t: -16
+        level: WARN
+        msg: "db pool: waited 4210ms to acquire connection (in_use=20/20, waiters=61)"
+        count: 212
+      - t: -11
+        level: ERROR
+        msg: "TimeoutError: could not acquire connection from pool within 5000ms"
+        count: 88
+      - t: -4
+        level: ERROR
+        msg: "TimeoutError: could not acquire connection from pool within 5000ms"
+        count: 415
+      - t: -1
+        level: ERROR
+        msg: "POST /checkout 500 (upstream=postgres-primary, elapsed=5003ms)"
+        count: 390
+    inventory-api:
+      - t: -52
+        level: INFO
+        msg: "Starting inventory-api v1.14.2"
+      - t: -20
+        level: INFO
+        msg: "GET /stock/batch 200 (elapsed=41ms)"
+        count: 8800
+    postgres-primary:
+      - t: -18
+        level: INFO
+        msg: "connection accepted from 10.4.2.19:51204 (total=97)"
+        count: 60
+      - t: -6
+        level: INFO
+        msg: "checkpoint complete: wrote 812 buffers"
+
+  metrics:
+    checkout-api:
+      http_p99_latency_ms:
+        unit: ms
+        points:
+          - {t: -60, v: 210}
+          - {t: -45, v: 225}
+          - {t: -38, v: 240}
+          - {t: -30, v: 620}
+          - {t: -20, v: 1890}
+          - {t: -10, v: 3800}
+          - {t: 0, v: 4210}
+      http_5xx_rate:
+        unit: errors/s
+        points:
+          - {t: -60, v: 0.02}
+          - {t: -30, v: 0.1}
+          - {t: -10, v: 14.6}
+          - {t: 0, v: 31.2}
+      db_pool_in_use:
+        unit: connections
+        points:
+          - {t: -60, v: 6}
+          - {t: -45, v: 7}
+          - {t: -38, v: 9}
+          - {t: -30, v: 18}
+          - {t: -20, v: 20}
+          - {t: -10, v: 20}
+          - {t: 0, v: 20}
+      db_pool_size:
+        unit: connections
+        points:
+          - {t: -60, v: 20}
+          - {t: 0, v: 20}
+      cpu_utilisation:
+        unit: percent
+        points:
+          - {t: -60, v: 31}
+          - {t: -30, v: 34}
+          - {t: 0, v: 29}
+    postgres-primary:
+      active_connections:
+        unit: connections
+        points:
+          - {t: -60, v: 44}
+          - {t: -30, v: 71}
+          - {t: 0, v: 97}
+      max_connections:
+        unit: connections
+        points:
+          - {t: -60, v: 400}
+          - {t: 0, v: 400}
+      cpu_utilisation:
+        unit: percent
+        points:
+          - {t: -60, v: 22}
+          - {t: -30, v: 28}
+          - {t: 0, v: 33}
+      replication_lag_s:
+        unit: s
+        points:
+          - {t: -60, v: 0.2}
+          - {t: 0, v: 0.3}
+
+  k8s:
+    - kind: Deployment
+      name: checkout-api
+      namespace: prod
+      spec:
+        replicas: 6
+        image: "registry.internal/checkout-api:v2.31.0"
+        env:
+          DB_POOL_SIZE: "20"
+          DB_POOL_TIMEOUT_MS: "5000"
+        resources:
+          requests: {cpu: "500m", memory: "512Mi"}
+          limits: {cpu: "2", memory: "1Gi"}
+      status:
+        readyReplicas: 6
+        restarts_last_hour: 0
+      events:
+        - t: -38
+          type: Normal
+          reason: ScalingReplicaSet
+          msg: "Scaled up replica set checkout-api-7f9c to 6"
+
+  runbooks:
+    - id: RB-014
+      title: "Database connection pool exhaustion"
+      tags: [database, pool, latency, timeout, postgres]
+      body: >-
+        Symptoms: p99 latency climbs while CPU stays flat; logs show
+        "could not acquire connection from pool". Confirm db_pool_in_use has
+        pinned at db_pool_size. Check whether a recent deploy added extra
+        queries per request. Postgres max_connections is 400 cluster-wide;
+        raising a single service pool to 40 is within budget. Prefer rolling
+        back the offending deploy if the extra query is not business-critical.
+    - id: RB-003
+      title: "Postgres primary CPU saturation"
+      tags: [database, postgres, cpu, saturation]
+      body: >-
+        Symptoms: postgres-primary CPU above 85% with rising replication lag.
+        Identify heavy queries with pg_stat_statements before scaling.
+
+
+ground_truth:
+  root_cause: >-
+    checkout-api v2.31.0 added a per-request audit write to Postgres, which
+    roughly doubled connection hold time per request. The service's connection
+    pool (DB_POOL_SIZE=20) saturated, requests queued waiting for a connection
+    and then timed out after 5s. Postgres itself is healthy -- 97 of 400
+    connections in use, CPU at 33%.
+  must_include:
+    - ["connection pool", "pool", "db_pool"]
+    - ["exhaust", "saturat", "starv", "20/20", "maxed", "full", "limit"]
+    - ["v2.31.0", "deploy", "release", "audit write"]
+  must_not_include:
+    - ["postgres cpu", "database is overloaded", "max_connections reached"]
+  expected_actions: [rollback_deploy, increase_db_pool_size]
+  red_herrings:
+    - "inventory-api deployed 52 minutes before the alert but is healthy (41ms, no errors)"
+    - "postgres-primary connection count rose, but is far below max_connections"

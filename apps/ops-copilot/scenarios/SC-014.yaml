@@ -1,0 +1,101 @@
+id: SC-014
+title: A long migration holds a lock and stalls every write to the accounts table
+category: data-layer
+alert:
+  name: AccountWritesTimingOut
+  severity: P1
+  service: accounts-api
+  fired_at: "2026-09-17T11:15:00Z"
+  description: >-
+    All write operations to accounts-api are timing out. Reads are unaffected
+    and fast. Started 6 minutes ago.
+world:
+  services:
+    - {name: accounts-api, tier: 1, owner: identity, depends_on: [postgres-primary]}
+    - {name: postgres-primary, tier: 1, owner: platform-team, depends_on: []}
+    - {name: data-migrator, tier: 3, owner: data-platform, depends_on: [postgres-primary]}
+  deploys:
+    - t: -14
+      service: data-migrator
+      version: v0.4.0
+      commit: 31fb8a0
+      author: data-bot
+      summary: "Backfill accounts.region_code; ALTER TABLE accounts ADD COLUMN with non-null default"
+  logs:
+    accounts-api:
+      - {t: -6, level: ERROR, msg: "canceling statement due to statement timeout (UPDATE accounts SET ...)", count: 4200}
+      - {t: -2, level: ERROR, msg: "canceling statement due to statement timeout (INSERT INTO accounts ...)", count: 1900}
+      - {t: -2, level: INFO, msg: "GET /accounts/{id} 200 (elapsed=6ms)", count: 88000}
+    postgres-primary:
+      - {t: -12, level: INFO, msg: "process 44182 still waiting for AccessExclusiveLock on relation accounts after 1000.114 ms", count: 3100}
+      - {t: -12, level: INFO, msg: "pid 39001 executing: ALTER TABLE accounts ADD COLUMN region_code text NOT NULL DEFAULT 'unknown'"}
+    data-migrator:
+      - {t: -14, level: INFO, msg: "starting backfill job accounts.region_code"}
+  metrics:
+    accounts-api:
+      write_error_rate:
+        unit: percent
+        points: [{t: -60, v: 0.1}, {t: -15, v: 0.1}, {t: -8, v: 61}, {t: 0, v: 100}]
+      read_p99_latency_ms:
+        unit: ms
+        points: [{t: -60, v: 8}, {t: 0, v: 7}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -60, v: 34}, {t: 0, v: 22}]
+    postgres-primary:
+      lock_waits:
+        unit: sessions
+        points: [{t: -60, v: 0}, {t: -14, v: 2}, {t: -8, v: 180}, {t: 0, v: 410}]
+      longest_transaction_s:
+        unit: s
+        points: [{t: -60, v: 2}, {t: -14, v: 4}, {t: 0, v: 840}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -60, v: 26}, {t: 0, v: 31}]
+      active_connections:
+        unit: connections
+        points: [{t: -60, v: 110}, {t: 0, v: 398}]
+      max_connections:
+        unit: connections
+        points: [{t: -60, v: 400}, {t: 0, v: 400}]
+      replication_lag_s:
+        unit: s
+        points: [{t: -60, v: 0.2}, {t: 0, v: 0.4}]
+  k8s:
+    - kind: Job
+      name: data-migrator-region-backfill
+      namespace: prod
+      spec: {image: "registry.internal/data-migrator:v0.4.0", active_deadline_seconds: 7200}
+      status: {active: 1, started_minutes_ago: 14, backend_pid: 39001}
+      events:
+        - {t: -14, type: Normal, reason: Started, msg: "Created pod data-migrator-region-backfill-x9d2"}
+  runbooks:
+    - id: RB-042
+      title: "Lock contention from schema migrations"
+      tags: [database, lock, migration, alter-table, ddl, postgres, blocking, writes]
+      body: >-
+        Writes failing while reads stay fast is lock contention, not capacity.
+        ALTER TABLE takes an AccessExclusiveLock; with a non-null default on a
+        large table it rewrites the whole table and holds that lock for the
+        duration, queueing every write behind it. Identify the holder via the
+        longest running transaction and its backend pid, then terminate it with
+        kill_long_running_query. Rerun the migration as a nullable add plus a
+        batched backfill.
+ground_truth:
+  root_cause: >-
+    The data-migrator backfill job started an ALTER TABLE accounts ADD COLUMN
+    with a NOT NULL DEFAULT, which rewrites the table and holds an
+    AccessExclusiveLock on accounts for the whole rewrite -- now 840 seconds and
+    counting on backend pid 39001. Every write queues behind that lock and hits
+    the statement timeout, while reads served from before the lock stay fast at
+    6ms. Connections climbed to 398 of 400 because blocked writers hold theirs.
+  must_include:
+    - ["lock", "accessexclusivelock", "blocking", "contention"]
+    - ["alter table", "migration", "backfill", "ddl", "data-migrator", "39001"]
+    - ["write", "read", "timeout", "queue", "rewrite"]
+  must_not_include:
+    - ["connection pool exhaustion is the cause", "postgres is undersized", "accounts-api deploy"]
+  expected_actions: [kill_long_running_query]
+  red_herrings:
+    - "connections at 398 of 400 looks like connection exhaustion, but it is downstream of the blocked writers"
+    - "accounts-api itself has not deployed; the change came from a different service's Job"

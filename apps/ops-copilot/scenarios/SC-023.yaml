@@ -1,0 +1,101 @@
+id: SC-023
+title: Packet loss on one node produces intermittent timeouts across its pods
+category: network
+alert:
+  name: IntermittentCheckoutTimeouts
+  severity: P2
+  service: checkout-api
+  fired_at: "2026-09-18T14:15:00Z"
+  description: >-
+    Roughly 8% of checkout-api requests time out. The failures are spread across
+    all endpoints and do not correlate with any customer or payload.
+world:
+  services:
+    - {name: checkout-api, tier: 1, owner: payments-team, depends_on: [payment-auth]}
+    - {name: payment-auth, tier: 1, owner: payments-team, depends_on: []}
+  deploys: []
+  logs:
+    checkout-api:
+      - {t: -60, level: ERROR, msg: "upstream timeout calling payment-auth (pod=checkout-api-8f2a-q7rz, node=ip-10-4-7-12)", count: 2100}
+      - {t: -20, level: ERROR, msg: "upstream timeout calling payment-auth (pod=checkout-api-8f2a-m4kt, node=ip-10-4-7-12)", count: 2600}
+      - {t: -20, level: INFO, msg: "POST /checkout 200 (elapsed=64ms, node=ip-10-4-2-31)", count: 88000}
+    payment-auth:
+      - {t: -30, level: INFO, msg: "POST /authorize 200 (elapsed=28ms)", count: 96000}
+  metrics:
+    checkout-api:
+      timeout_rate:
+        unit: percent
+        points: [{t: -240, v: 0.1}, {t: -120, v: 3.9}, {t: -60, v: 7.6}, {t: 0, v: 8.1}]
+      http_p99_latency_ms:
+        unit: ms
+        points: [{t: -240, v: 96}, {t: 0, v: 3040}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -240, v: 42}, {t: 0, v: 39}]
+      ready_replicas:
+        unit: pods
+        points: [{t: -240, v: 24}, {t: 0, v: 24}]
+    payment-auth:
+      http_p99_latency_ms:
+        unit: ms
+        points: [{t: -240, v: 31}, {t: 0, v: 30}]
+      http_5xx_rate:
+        unit: errors/s
+        points: [{t: -240, v: 0.02}, {t: 0, v: 0.02}]
+  k8s:
+    - kind: Node
+      name: ip-10-4-7-12
+      namespace: prod
+      spec: {instance_type: m6i.4xlarge, pods_scheduled: 31}
+      status:
+        conditions: {Ready: "True", NetworkUnavailable: "False"}
+        network_tx_errors_per_s: 1840
+        network_rx_dropped_per_s: 2210
+        retransmit_rate_percent: 14.2
+      events:
+        - {t: -300, type: Warning, reason: NodeNetworkDegraded, msg: "elevated packet retransmission detected on eni-04a9"}
+    - kind: Node
+      name: ip-10-4-2-31
+      namespace: prod
+      spec: {instance_type: m6i.4xlarge, pods_scheduled: 29}
+      status:
+        conditions: {Ready: "True", NetworkUnavailable: "False"}
+        network_tx_errors_per_s: 0
+        network_rx_dropped_per_s: 0
+        retransmit_rate_percent: 0.02
+      events: []
+    - kind: Deployment
+      name: checkout-api
+      namespace: prod
+      spec: {replicas: 24, image: "registry.internal/checkout-api:v2.32.1"}
+      status: {readyReplicas: 24, restarts_last_hour: 0}
+      events: []
+  runbooks:
+    - id: RB-050
+      title: "Isolating a bad node"
+      tags: [node, network, packet-loss, retransmit, intermittent, partial, hardware]
+      body: >-
+        A failure rate that sits at a stable fraction well below 100%, with no
+        correlation to endpoint or payload, usually maps to a subset of
+        infrastructure. Group failures by pod and then by node before looking at
+        application code. A node with elevated retransmits and dropped packets
+        affects every pod it hosts. Cordon and drain it; the underlying NIC or
+        host issue is a hardware ticket, not an on-call fix.
+ground_truth:
+  root_cause: >-
+    Node ip-10-4-7-12 has degraded networking -- 14.2% TCP retransmits, 2210
+    dropped packets/s and 1840 tx errors/s, flagged by a NodeNetworkDegraded
+    event five hours ago. Every failing request comes from a pod scheduled on
+    that node; pods on ip-10-4-2-31 are unaffected. The roughly 8% failure rate
+    matches that node's share of the 24 checkout-api pods. payment-auth is
+    healthy at 30ms throughout.
+  must_include:
+    - ["node", "ip-10-4-7-12", "host"]
+    - ["packet loss", "retransmit", "dropped", "network", "nic"]
+    - ["subset", "some pods", "one node", "8%", "partial", "scheduled on"]
+  must_not_include:
+    - ["payment-auth is slow", "deploy caused", "needs more replicas", "application bug"]
+  expected_actions: [drain_node]
+  red_herrings:
+    - "there is no deploy and no config change at all in the window"
+    - "a stable 8% failure rate looks like a payload-dependent application bug"

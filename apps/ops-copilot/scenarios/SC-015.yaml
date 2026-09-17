@@ -1,0 +1,104 @@
+id: SC-015
+title: Read replica lag makes newly written profiles disappear
+category: data-layer
+alert:
+  name: ProfileReadAfterWriteFailures
+  severity: P2
+  service: profile-service
+  fired_at: "2026-09-17T13:50:00Z"
+  description: >-
+    Users report saved profile changes reverting. profile-service reports 0%
+    error rate and normal latency. Support has 340 open tickets in 40 minutes.
+world:
+  services:
+    - {name: profile-service, tier: 1, owner: identity, depends_on: [postgres-primary, postgres-replica-a]}
+    - {name: postgres-primary, tier: 1, owner: platform-team, depends_on: []}
+    - {name: postgres-replica-a, tier: 1, owner: platform-team, depends_on: [postgres-primary]}
+    - {name: analytics-batch, tier: 3, owner: data-platform, depends_on: [postgres-replica-a]}
+  deploys:
+    - t: -55
+      service: analytics-batch
+      version: v2.1.0
+      commit: e903c17
+      author: data-bot
+      summary: "Nightly aggregation moved to hourly; reads from postgres-replica-a"
+  logs:
+    profile-service:
+      - {t: -30, level: INFO, msg: "PUT /profile 200 (elapsed=18ms, target=primary)", count: 22000}
+      - {t: -30, level: INFO, msg: "GET /profile 200 (elapsed=4ms, target=replica-a)", count: 91000}
+    postgres-replica-a:
+      - {t: -50, level: WARN, msg: "replication lag 41s, apply process waiting on buffer pin", count: 60}
+      - {t: -5, level: WARN, msg: "replication lag 214s, apply process waiting on buffer pin", count: 60}
+    analytics-batch:
+      - {t: -55, level: INFO, msg: "starting hourly aggregation (scan window=24h)"}
+      - {t: -5, level: INFO, msg: "aggregation query running 2900s on replica-a"}
+  metrics:
+    profile-service:
+      http_5xx_rate:
+        unit: errors/s
+        points: [{t: -120, v: 0.02}, {t: 0, v: 0.02}]
+      read_p99_latency_ms:
+        unit: ms
+        points: [{t: -120, v: 5}, {t: 0, v: 5}]
+      write_p99_latency_ms:
+        unit: ms
+        points: [{t: -120, v: 22}, {t: 0, v: 21}]
+    postgres-replica-a:
+      replication_lag_s:
+        unit: s
+        points: [{t: -180, v: 0.3}, {t: -60, v: 0.4}, {t: -50, v: 41}, {t: -20, v: 148}, {t: 0, v: 214}]
+      longest_query_s:
+        unit: s
+        points: [{t: -180, v: 3}, {t: -55, v: 60}, {t: 0, v: 2900}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -180, v: 18}, {t: 0, v: 82}]
+    postgres-primary:
+      replication_lag_s:
+        unit: s
+        points: [{t: -180, v: 0}, {t: 0, v: 0}]
+      cpu_utilisation:
+        unit: percent
+        points: [{t: -180, v: 30}, {t: 0, v: 32}]
+      active_connections:
+        unit: connections
+        points: [{t: -180, v: 120}, {t: 0, v: 124}]
+  k8s:
+    - kind: CronJob
+      name: analytics-batch
+      namespace: prod
+      spec: {schedule: "0 * * * *", image: "registry.internal/analytics-batch:v2.1.0", read_target: postgres-replica-a}
+      status: {last_schedule_minutes_ago: 55, active: 1, backend_pid: 51200}
+      events:
+        - {t: -55, type: Normal, reason: SuccessfulCreate, msg: "Created job analytics-batch-28911"}
+  runbooks:
+    - id: RB-043
+      title: "Replica lag and read-after-write"
+      tags: [replica, replication, lag, stale-read, consistency, postgres, read-after-write]
+      body: >-
+        A service that writes to the primary and reads from a replica shows
+        vanished writes, not errors, when the replica falls behind -- every
+        request succeeds and every dashboard stays green, so the signal comes
+        from users rather than telemetry. On Postgres, a long-running query on a
+        replica can block WAL apply (buffer pin conflicts) and drive lag upward.
+        Find the longest query on the replica and terminate it; lag recovers in
+        minutes. Route read-after-write paths to the primary as the durable fix.
+ground_truth:
+  root_cause: >-
+    analytics-batch moved from nightly to hourly and runs a 24-hour aggregation
+    scan against postgres-replica-a. That long-running query, now 2900 seconds
+    old, blocks WAL apply on the replica through buffer pin conflicts, driving
+    replication lag from 0.4s to 214s. profile-service writes to the primary and
+    reads from the replica, so a user's own saved change is not yet visible on
+    read and appears to revert. Every service metric stays green because nothing
+    is erroring.
+  must_include:
+    - ["replica", "replication lag", "lag", "stale"]
+    - ["analytics-batch", "long-running query", "long running", "aggregation", "2900", "blocks", "wal"]
+    - ["read", "write", "primary", "read-after-write", "consistency"]
+  must_not_include:
+    - ["profile-service bug", "profile-service deploy", "data loss", "primary is unhealthy"]
+  expected_actions: [kill_long_running_query]
+  red_herrings:
+    - "every profile-service metric is green, so a telemetry-only investigation concludes nothing is wrong"
+    - "the primary is completely healthy, so checking only the write path finds no fault"
