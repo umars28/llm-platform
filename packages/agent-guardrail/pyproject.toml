@@ -1,0 +1,31 @@
+[project]
+name = "agent-guardrail"
+version = "0.1.0"
+description = "A trust-aware guardrail for tool-using agents: detects indirect prompt injection arriving through tool results and retrieved documents, and gates privileged tools on what has entered the context."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Umar Sabirin" }]
+dependencies = [
+    "sentence-transformers>=3.3",
+    "scikit-learn>=1.5",
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+agent-guardrail = "agent_guardrail.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_guardrail"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: needs a model loaded"]
