@@ -3,7 +3,12 @@
 # edit, which is the difference between a 10-second and a 3-minute CI loop.
 FROM python:3.12-slim AS deps
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# A released version rather than :latest, which moves by design -- the same
+# objection Terraform raises here against image_tag = "latest". Pinned by tag
+# and not by digest on purpose: uv publishes a multi-arch index, and the only
+# digests the registry hands back per-arch would build on CI's amd64 and fail
+# on an arm64 laptop.
+COPY --from=ghcr.io/astral-sh/uv:0.12.15 /uv /usr/local/bin/uv
 WORKDIR /app
 
 COPY pyproject.toml ./
