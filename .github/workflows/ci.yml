@@ -37,6 +37,29 @@ jobs:
           - packages/llm-eval-harness
           - packages/llm-token-optimizer
           - packages/llm-tracing
+    services:
+      # Only runbook-rag uses this. Its pgvector suite is a real round trip
+      # through Postgres rather than a mock, so skipping it in CI would leave
+      # the backend most likely to break as the one never exercised. The other
+      # seven projects ignore the container.
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: runbook_rag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # The app creates its own extension and schema; this only points it at
+      # the container instead of the local socket the default DSN assumes.
+      RUNBOOK_RAG_DSN: postgresql://postgres:postgres@localhost:5432/runbook_rag
+
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
