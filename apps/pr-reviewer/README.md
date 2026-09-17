@@ -5,7 +5,12 @@ against real defects taken from real git history.
 
 Most LLM PR reviewers are unmeasured. They leave comments, and nobody knows what
 share of them are right or how much noise they add. This one carries both
-numbers, and the numbers are not flattering — which is the point of having them.
+numbers.
+
+The headline result is that an 8B local model finds **0 of 15** real defects
+while flagging **20%** of clean diffs — net-negative to ship. That is a finding
+about the model at that size, not a limitation of the harness: the harness is
+precisely what turns "this reviewer feels noisy" into a number you can act on.
 
 ## Results
 

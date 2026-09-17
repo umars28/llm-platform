@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Umar Sabirin" }]
 dependencies = [
-    "anthropic[mcp]>=0.75.0",
+    "anthropic[mcp]>=1.6",
     "mcp>=1.2.0",
     "pyyaml>=6.0",
 ]
@@ -22,6 +22,9 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
 # Optional on purpose: without it the agent still investigates, just with a
 # weaker runbook search. Install from https://github.com/umars28/runbook-rag
 retrieval = ["runbook-rag>=0.1.0"]
+
+[tool.uv.sources]
+runbook-rag = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
