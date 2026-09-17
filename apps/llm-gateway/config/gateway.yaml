@@ -1,0 +1,39 @@
+# Tenants and providers. Mounted as a ConfigMap in Kubernetes; API keys come
+# from the environment named by api_key_env, never from this file.
+
+tenants:
+  - name: platform
+    api_key: dev-platform-key
+    monthly_budget_usd: 200
+    requests_per_s: 20
+    burst: 40
+
+  - name: research
+    api_key: dev-research-key
+    monthly_budget_usd: 50
+    requests_per_s: 5
+    burst: 10
+    # Restricted to the cheap tier: an experiment should not be able to reach
+    # the expensive model by accident.
+    models: ["claude-haiku-*"]
+
+providers:
+  - name: anthropic
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+    priority: 10
+    failure_threshold: 5
+    probe_after_s: 30
+    models:
+      claude-opus-5: claude-opus-5
+      claude-haiku-4-5: claude-haiku-4-5
+
+  - name: openrouter
+    base_url: https://openrouter.ai/api
+    api_key_env: OPENROUTER_API_KEY
+    priority: 20
+    failure_threshold: 5
+    probe_after_s: 30
+    models:
+      claude-opus-5: anthropic/claude-opus-5
+      claude-haiku-4-5: anthropic/claude-haiku-4-5
