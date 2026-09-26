@@ -23,6 +23,7 @@ from typing import Any
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 DEFAULT_LOCAL_MODEL = os.environ.get("PR_REVIEWER_LOCAL_MODEL", "qwen3:8b")
+MAX_RETRIES = int(os.environ.get("PR_REVIEWER_MAX_RETRIES", "8"))
 
 
 @dataclass
@@ -162,12 +163,12 @@ def build_client(backend: str = "auto", model: str | None = None):
     if backend == "api":
         import anthropic
 
-        return anthropic.Anthropic()
+        return anthropic.Anthropic(max_retries=MAX_RETRIES)
 
     try:
         import anthropic
 
-        client = anthropic.Anthropic()
+        client = anthropic.Anthropic(max_retries=MAX_RETRIES)
         if client.api_key or getattr(client, "auth_token", None) or client.auth_headers:
             return client
     except Exception:

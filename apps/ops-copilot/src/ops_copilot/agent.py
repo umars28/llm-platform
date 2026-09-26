@@ -155,6 +155,9 @@ PRICING = {
     "claude-sonnet-5": (3.00, 15.00, 0.30),
     "claude-sonnet-4-6": (3.00, 15.00, 0.30),
     "claude-haiku-4-5": (1.00, 5.00, 0.10),
+    "claude-opus": (5.00, 25.00, 0.50),
+    "claude-sonnet": (3.00, 15.00, 0.30),
+    "claude-haiku": (1.00, 5.00, 0.10),
 }
 DEFAULT_PRICING = PRICING["claude-opus-5"]
 

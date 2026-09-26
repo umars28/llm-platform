@@ -15,7 +15,9 @@ from pathlib import Path
 
 from .backends import OllamaClient, build_client
 from .extract import extract_all, load, save
-from .review import Review, Score, found_the_defect, review
+from .review import (
+    Review, Score, found_the_defect, review, review_waiting_for_quota,
+)
 
 BOLD, DIM, RED, GREEN, YELLOW, RESET = (
     "\033[1m", "\033[2m", "\033[31m", "\033[32m", "\033[33m", "\033[0m",
@@ -71,7 +73,13 @@ def cmd_evaluate(args) -> int:
     started = time.time()
 
     for index, sample in enumerate(samples, start=1):
-        result = review(client, sample, model=model)
+        if args.delay and index > 1:
+            time.sleep(args.delay)
+        result = review_waiting_for_quota(
+            client, sample, model=model, max_tokens=args.max_tokens,
+            on_wait=lambda s: print(f"  {DIM}quota exhausted, waiting {s:.0f}s{RESET}",
+                                    flush=True),
+        )
         score.add(result, sample)
 
         if result.error:
@@ -152,6 +160,8 @@ def main() -> int:
 
     p_ev = sub.add_parser("evaluate", parents=[common])
     p_ev.add_argument("--limit", type=int)
+    p_ev.add_argument("--delay", type=float, default=0.0)
+    p_ev.add_argument("--max-tokens", type=int, default=8192)
     p_ev.set_defaults(func=cmd_evaluate)
 
     p_rv = sub.add_parser("review", parents=[common])

@@ -15,10 +15,12 @@ beats subtle and unaccountable.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import re
+import time
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from .extract import Sample
 
@@ -86,15 +88,40 @@ class Review:
         return bool(self.findings)
 
 
+_FENCED = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
+
+
+def _json_objects(text: str):
+    for match in _FENCED.finditer(text):
+        yield match.group(1)
+    depth, start = 0, -1
+    for index, char in enumerate(text):
+        if char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                yield text[start : index + 1]
+
+
 def _parse(text: str) -> list[Finding]:
     """Parse findings, tolerating prose around the object."""
+    data = None
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        start, end = text.find("{"), text.rfind("}")
-        if start == -1 or end <= start:
-            raise ValueError(f"no JSON object in review: {text[:160]!r}")
-        data = json.loads(text[start : end + 1])
+        for candidate in _json_objects(text):
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict) and "findings" in parsed:
+                data = parsed
+
+    if not isinstance(data, dict) or "findings" not in data:
+        raise ValueError(f"no JSON object with findings in review: {text[:160]!r}")
 
     return [
         Finding(
@@ -144,6 +171,49 @@ def review(client: Any, sample: Sample, model: str, max_tokens: int = 8192) -> R
         input_tokens=getattr(response.usage, "input_tokens", 0) or 0,
         output_tokens=getattr(response.usage, "output_tokens", 0) or 0,
     )
+
+
+_RESET_AT = re.compile(r"resets at: (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+
+
+def seconds_until_quota_reset(error: str) -> float:
+    match = _RESET_AT.search(error or "")
+    if not match:
+        return 0.0
+    reset = dt.datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S").replace(
+        tzinfo=dt.timezone.utc
+    )
+    return max(0.0, (reset - dt.datetime.now(dt.timezone.utc)).total_seconds())
+
+
+def review_waiting_for_quota(
+    client: Any,
+    sample: Sample,
+    model: str,
+    max_tokens: int = 8192,
+    attempts: int = 4,
+    on_wait: Callable[[float], None] | None = None,
+) -> Review:
+    """Review, treating a gateway quota window as something to wait out.
+
+    An SDK retry backs off by seconds; a per-minute quota resets at a stated
+    wall-clock time, and the error says when. Retrying before that point spends
+    a request to be told the same thing, so this sleeps until the window turns
+    over instead. Only rate-limit errors are retried -- everything else is the
+    model's answer and is returned as it stands.
+    """
+    result = review(client, sample, model=model, max_tokens=max_tokens)
+    for _ in range(max(0, attempts - 1)):
+        if not result.error or "RateLimitError" not in result.error:
+            return result
+        wait = seconds_until_quota_reset(result.error)
+        if wait <= 0:
+            return result
+        if on_wait is not None:
+            on_wait(wait)
+        time.sleep(wait + 2.0)
+        result = review(client, sample, model=model, max_tokens=max_tokens)
+    return result
 
 
 # -- scoring ------------------------------------------------------------

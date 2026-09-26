@@ -12,3 +12,10 @@ deploy/terraform/*.tfstate*
 deploy/.rules-check.yaml
 apps/*/.venv/
 packages/*/.venv/
+.env
+.env.*
+!.env.example
+runs/
+audit/
+.cache/
+.judge-cache/
