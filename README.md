@@ -9,6 +9,18 @@ The organising constraint is that **every claim here is a number produced by a
 command you can run**. Each component ships its own labelled corpus, and the
 corpora live in `benchmarks/` so one harness scores all of them.
 
+## At a glance
+
+| | |
+|---|---|
+| **What it is** | A monorepo of 8 components: 4 platform packages (tracing, evaluation, token optimisation, prompt-injection guardrail), an LLM gateway running on Kubernetes, and 3 agents built on top (incident diagnosis, code review, docs retrieval). |
+| **Approach** | No orchestration framework. Anthropic SDK, MCP, OpenTelemetry and a vector store are wired directly, and every result is scored against a labelled corpus in `benchmarks/`. |
+| **Best numbers** | Incident root cause **96.7%** (29/30). Retrieval recall@5 **0.526 → 0.638** with reranking. **0 requests dropped** during a Kubernetes rollout. Prompt-injection detection **68% at 0% false positives**. |
+| **Honest numbers** | An 8B local model finds **0 of 15** real defects as a code reviewer, and is reported as net-negative. The guardrail ships its weaker detector because the stronger one has 20–30% false positives. |
+| **Infrastructure** | Gateway with per-tenant quota, provider failover and cost attribution. Deployed with Terraform + Helm and verified in-cluster. |
+| **Stack** | Python 3.11+, uv workspace, Anthropic SDK, MCP, OpenTelemetry, pgvector/Qdrant, Redis, Kubernetes, Helm, Terraform, GitHub Actions |
+| **Related** | [incident-lora](https://github.com/umars28/incident-lora) fine-tunes a 0.5B model on this repo's incident corpus. [rag-framework-bench](https://github.com/umars28/rag-framework-bench) rebuilds `runbook-rag` in LangChain and LlamaIndex to measure what a framework adds. |
+
 ## Results
 
 | component | measured | result |
@@ -49,11 +61,13 @@ packages/     the platform layer
   agent-guardrail       provenance-gated capabilities against prompt injection
 
 apps/         agents built on that layer
+  llm-gateway           per-tenant quota, provider failover, cost attribution
   ops-copilot           MCP incident diagnosis with a human approval gate
   pr-reviewer           LLM code review, recall and false-positive rate measured
   runbook-rag           hybrid retrieval and reranking over operational docs
 
 benchmarks/   the labelled corpora every result above is scored against
+deploy/       Terraform and Helm for llm-gateway, plus its runbook
 ```
 
 ## Why one repository
@@ -71,7 +85,7 @@ the thing that would eventually make the numbers wrong.
 uv sync
 uv run runbook-rag eval
 uv run ops-copilot eval
-uv run guardrail evaluate
+uv run agent-guardrail eval
 ```
 
 Everything except `ops-copilot` runs locally with no API key. Python 3.11+.
